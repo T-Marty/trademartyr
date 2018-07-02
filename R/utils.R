@@ -481,9 +481,11 @@ portfolio_cumulative.return <- function(df, weights=NULL, rebalance_on=NULL,
       }
   df <- zoo::na.fill(df,0)
   df <- df[paste0(as.Date(zoo::index(weights)[1]),"/")]
+  # Weight vector with only positive weights
+  w_pos <- as.numeric(as.numeric(weights>0))*weights
   # initialise return contribution matrix
   c_mat <- xts(matrix(0,nrow=nrow(df),ncol = ncol(df)),order.by = index(df))
-  c_mat[index(weights)[1],] <- weights[1,]
+  c_mat[index(weights)[1],] <- w_pos[1,]
   bop <- 1 #initialise beginning of period wealth
   for (i in 1:nrow(weights)){
     from = as.Date(index(weights[i,]))+1
@@ -497,7 +499,7 @@ portfolio_cumulative.return <- function(df, weights=NULL, rebalance_on=NULL,
     cum_rets <- (cumprod(1+returns))
     for (j in 1:ncol(cum_rets)){
       c_mat[drange,j] <- ((cum_rets[,j]-1)*as.numeric(weights[i,j])*abs(bop)
-                          + as.numeric(weights[i,j])*abs(bop))
+                          + as.numeric(w_pos[i,j])*bop)
     }
     bop <- sum(c_mat[to])
   }

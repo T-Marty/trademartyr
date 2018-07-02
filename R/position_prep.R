@@ -169,12 +169,8 @@ place_transactions_index <- function(initEq,
                                enter_prefer="Close",
                                exit_prefer="Close"){
   #--- Create flag every K months to buy/sell
-  p <- which(rowSums(abs(wts)) != 0)[1]
-  month_index <- xts(matrix(c(rep(0,p-1),K_m:(nrow(wts)+K_m-p)),ncol=1),
-                     order.by=index(wts))
-  wt_ind <- month_index - start_i + 1
-  wt_ind <- wt_ind[(wt_ind %% K_m == 0) & (wt_ind > 0),]
-  wts_i <- wts[index(wt_ind),]
+  weight <- weights_i(wts=wts, start_i=start_i, k=K_m)
+  wts_i <- weight[[1]]; wt_ind <- weight[[2]]; rm(weight)
   portfolioName <- paste0("portfolio_",start_i)
   suppressWarnings(rm(list=c(paste0("portfolio.",portfolioName)), pos=.blotter))
   blotter::initPortf(name=portfolioName, symbols=assets, initDate=initdate)
@@ -249,12 +245,8 @@ place_transactions_ordering <- function(initEq,
   FinancialInstrument::currency(Currency)
   FinancialInstrument::stock(assets, currency = Currency)
   #--- Create flag every K months to buy/sell
-  p <- which(rowSums(abs(wts)) != 0)[1]
-  month_index <- xts(matrix(c(rep(0,p-1),K_m:(nrow(wts)+K_m-p)),ncol=1),
-                     order.by=index(wts))
-  wt_ind <- month_index - start_i + 1
-  wt_ind <- wt_ind[(wt_ind %% K_m == 0) & (wt_ind > 0),]
-  wts_i <- wts[index(wt_ind),]
+  weight <- weights_i(wts=wts, start_i=start_i, k=K_m)
+  wts_i <- weight[[1]]; wt_ind <- weight[[2]]; rm(weight)
   portfolioName <- paste0("portfolio_",start_i)
   suppressWarnings(rm(list=c(paste0("portfolio.",portfolioName)), pos=.blotter))
   blotter::initPortf(name=portfolioName, symbols=assets, initDate=initdate)
@@ -578,4 +570,16 @@ get_weights_mr <- function(mranks, long_g, short_g, long_only=FALSE){
     wts <- li-si
     return(wts)
   }
+}
+
+#' Given an xts of portfolio weights with signals each period,
+#' returns the kth portfolio weights.
+weights_i <- function(wts, start_i, k){
+  p <- which(rowSums(abs(wts)) != 0)[1]
+  month_index <- xts(matrix(c(rep(0,p-1),k:(nrow(wts)+k-p)),ncol=1),
+                     order.by=index(wts))
+  wt_ind <- month_index - start_i + 1
+  wt_ind <- wt_ind[(wt_ind %% k == 0) & (wt_ind > 0),]
+  wts_i <- wts[index(wt_ind),]
+  return(list(wts_i,wt_ind))
 }
