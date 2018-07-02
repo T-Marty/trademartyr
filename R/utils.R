@@ -438,3 +438,71 @@ get_firm_data <- function(firm_saveDir, firmDir, priceDir, assets, ind=NULL){
   }
   return(NoData)
 }
+
+#' Function to calculate portfolio equity given weights. Unlike the version
+#' from PerformanceAnalytics, can handle long-short portfolios. Returns equity
+#' curve as opposed to returns.
+portfolio_cumulative.return <- function(df, weights=NULL, rebalance_on=NULL,
+                                        verbose=FALSE){
+  if(!("xts" %in% class(df))|!("zoo" %in% class(df))){
+    stop("df must be an xts or zoo object.")
+  }
+  if(class(weights)[1]!="numeric" & !(is.null(weights))){
+    if(!("xts" %in% class(weights))|!("zoo" %in% class(weights))){
+      stop("Weights must be an xts, zoo or numeric object.")
+    }
+    if(ncol(df)!=ncol(weights)){
+      stop("Number of columns in weights must be equal
+           to number of columns in df.")
+    }
+    } else {
+      if(is.null(weights)){
+        weights <- rep(1,ncol(df))/ncol(df)
+        warning("Weights not specified. Assuming equal-weighted portfolio.")
+      }
+      if(length(weights)!=ncol(df)){
+        stop("Number of weights must be equal
+             to number of columns in df.")
+      }
+      if(!is.null(rebalance_on)){
+        if(rebalance_on=="days"){
+          rets <- na.fill(df,0)
+          for(k in 1:ncol(df)){
+            rets[,k] <- rets[,k]*weights[k]
+          }
+          eq <- xts(cumprod(1+rowSums(rets)),order.by=index(rets))
+          return(eq)
+        } else {
+          eps <- xts::endpoints(df,on=rebalance_on); eps[1] <- 1
+        }
+      } else {eps <- 1}
+      weights <- xts(matrix(rep(weights,length(eps)),ncol=ncol(df),
+                            byrow=TRUE), order.by = index(df)[eps])
+      }
+  df <- zoo::na.fill(df,0)
+  df <- df[paste0(as.Date(zoo::index(weights)[1]),"/")]
+  # initialise return contribution matrix
+  c_mat <- xts(matrix(0,nrow=nrow(df),ncol = ncol(df)),order.by = index(df))
+  c_mat[index(weights)[1],] <- weights[1,]
+  bop <- 1 #initialise beginning of period wealth
+  for (i in 1:nrow(weights)){
+    from = as.Date(index(weights[i,]))+1
+    if (i == nrow(weights)){
+      to = as.Date(last(index(df)))
+    } else {
+      to = as.Date(index(weights[(i+1),]))
+    }
+    drange <- paste0(from, "::", to)
+    returns = df[drange]
+    cum_rets <- (cumprod(1+returns))
+    for (j in 1:ncol(cum_rets)){
+      c_mat[drange,j] <- ((cum_rets[,j]-1)*as.numeric(weights[i,j])*abs(bop)
+                          + as.numeric(weights[i,j])*abs(bop))
+    }
+    bop <- sum(c_mat[to])
+  }
+  eq <- xts(rowSums(c_mat),order.by = index(c_mat))
+  if(verbose){
+    return(list(eq,c_mat))
+  } else {return(eq)}
+}
