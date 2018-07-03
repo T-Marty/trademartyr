@@ -21,8 +21,5 @@ date must be known in advance, or sorted within the procedure, since blotter
 requires transactions to be added in date order).
 }
 \note{
-If doesn't work in parallel environment, may need to load blotter and
-financial instrument packages within the function and call `stocks`
-`currency`. Best to find a way around this, as shouldn't call library within
-packages.
+Need to update now that `weights_i` function handles holdingTime.
 }

@@ -5,7 +5,8 @@
 \title{Function for ranking assets on momentum that require index membership for
 consideration.}
 \usage{
-momRankMembers(df, n = 6, s = 0, hist_members = newHM, on = "months")
+momRankMembers(df, n = 6, s = 0, hist_members = newHM, on = "months",
+  ind = NULL)
 }
 \arguments{
 \item{df}{xts object containing price series of assets to rank. Every column

@@ -35,3 +35,8 @@ of the given trading period. The remaining columns are the asset columns.
 The asset columns contain the last trading date for the given month, for
 which the asset was a member.
 }
+\note{
+Needs error for when `ind` doesn't match index(df). If no longer member
+still want to return last traded day, not just NA. Too slow, only go to
+last day with data.
+}

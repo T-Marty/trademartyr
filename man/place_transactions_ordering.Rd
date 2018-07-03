@@ -13,3 +13,6 @@ place_transactions_ordering(initEq, assets, Currency, ind, start_i = 1,
 Similar to `place_transactions_index` but transacts on the last
 traded price/membership date.
 }
+\note{
+Need to update now that `weights_i` function handles holdingTime.
+}

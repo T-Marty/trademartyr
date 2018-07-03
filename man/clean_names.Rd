@@ -4,7 +4,8 @@
 \alias{clean_names}
 \title{Function to clean individual asset OHLC data.}
 \usage{
-clean_names(symbolList, totalReturn = FALSE, Member = FALSE, ind = NULL)
+clean_names(symbolList, totalReturn = FALSE, Member = FALSE, ind = NULL,
+  envir = globalenv())
 }
 \arguments{
 \item{symbolList}{List of symbols loaded into the environment.}

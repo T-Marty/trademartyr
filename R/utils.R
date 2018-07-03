@@ -186,9 +186,14 @@ holdingTime <- function(current_date,end_date,holding_time,holding_unit="month")
 }
 
 #' Function to perform commands in parallel
-#' @example
+#' @import foreach foreach
+#' @import foreach %dopar%
+#' @examples
+#' DF_cl <- get_cols(sp500,"Close")
+#' ptext <- "naFillFrom(df=DF_cl[,i_1:i_2], ind=master_ind)"
+#' DF_cl <- run_parallel(n=ncol(DF_cl), ptext=ptext)
 run_parallel <- function(n, ptext, chunk_size=NULL){
-  cores <- detectCores()
+  cores <- parallel::detectCores()
   if (is.null(chunk_size)){
     chunk_size=trunc(n/(detectCores()-1))
   } else if (chunk_size >= n){
@@ -197,14 +202,14 @@ run_parallel <- function(n, ptext, chunk_size=NULL){
   nums1 <- seq(1,n,chunk_size)
   nums2 <- nums1-1
   nums2 <- c(nums2[-1],n)
-  mycluster <- makeCluster(cores-1,type = "FORK")
-  registerDoParallel(mycluster)
+  mycluster <- parallel::makeCluster(cores-1,type = "FORK")
+  doParallel::registerDoParallel(mycluster)
   out <- foreach(z = 1:length(nums1)) %dopar% { # Begin iteration for chunk z
     i_1 <- nums1[z]
     i_2 <- nums2[z]
     eval(parse(text=ptext))
   }
-  stopCluster(mycluster)
+  parallel::stopCluster(mycluster)
   return(out)
 }
 
@@ -214,10 +219,10 @@ txn_pretty <- function(portfolio_list){
   txn_master_list <- list()
   txn_list <- list()
   for (k in 1:length(portfolio_list)){
-    assets <- names(getPortfolio(portfolio_list[k])$symbols)
+    assets <- names(blotter::getPortfolio(portfolio_list[k])$symbols)
     for (i in 1:length(assets)){
       sym <- assets[i]
-      txns <- getTxns(portfolio_list[k], sym)
+      txns <- blotter::getTxns(portfolio_list[k], sym)
       txns$Symbol <- i
       txn_list[[i]] <- txns
     }
