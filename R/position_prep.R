@@ -188,10 +188,7 @@ txn_dates <- function(df, membership=TRUE, hist_members=newHM,
 #' last available price (otherwise, the last trading date or memberhsip exit
 #' date must be known in advance, or sorted within the procedure, since blotter
 #' requires transactions to be added in date order).
-#' @note If doesn't work in parallel environment, may need to load blotter and
-#' financial instrument packages within the function and call `stocks`
-#' `currency`. Best to find a way around this, as shouldn't call library within
-#' packages.
+#' @note Need to update now that `weights_i` function handles holdingTime.
 place_transactions_index <- function(initEq,
                                assets, Currency, ind, start_i=1, K_m=1, wts=wts,
                                initdate=initdate, enddate=enddate,
@@ -266,6 +263,7 @@ place_transactions_index <- function(initEq,
 #' Similar to `place_transactions_index` but transacts on the last
 #' traded price/membership date.
 #' @importFrom zoo index
+#' @note Need to update now that `weights_i` function handles holdingTime.
 place_transactions_ordering <- function(initEq,
                                         assets, Currency, ind, start_i=1, K_m=1, wts=wts,
                                         initdate=initdate, enddate=enddate,
@@ -344,6 +342,61 @@ place_transactions_ordering <- function(initEq,
   # Final update after last transactions (last day only)
   blotter::updatePortf(Portfolio=portfolioName, Dates=ind[length(ind)])
   a <- list(blotter::getPortfolio(portfolioName))
+  names(a) <- portfolioName
+  return(a)
+}
+
+#' Blotter portfolio simulation function that does not consider index
+#' membership. Analogous to `place_transactions_index`.
+place_transactions <- function(initEq, assets, Currency, ind, start_i=1, K_m=1,
+                               wts=wts, initdate=initdate, enddate=enddate,
+                               enter_prefer="Close", exit_prefer="Close",
+                               holding_time=FALSE){
+  #--- Create flag every K months to buy/sell
+  weight <- weights_i(wts=wts,start_i=start_i,k=K_m,holding_time=holding_time)
+  wts_i <- weight[[1]]; wt_ind <- weight[[2]]; rm(weight)
+  portfolioName <- paste0("portfolio_",start_i)
+  suppressWarnings(rm(list=c(paste0("portfolio.",portfolioName)), pos=.blotter))
+  blotter::initPortf(name=portfolioName, symbols=assets, initDate=initdate)
+  for( i in 1:length(ind) ) { # Start date loop
+    current_date=ind[i]
+    drange <- paste0(ind[1],"/",current_date)
+    blotter::updatePortf(Portfolio=portfolioName, Dates=drange)
+    #Note that the above line will update until end of current_date
+    if(current_date %in% index(wt_ind)){ # if entry date
+      equity<-sum(blotter::dailyStats(portfolioName,use="equity")[1])+(initEq)
+      for (j in 1:length(assets)){
+        symbol <- assets[j]
+        sym <- get(symbol)
+        enter_price <- sym[current_date,enter_prefer]
+        exit_price <- sym[current_date,exit_prefer]
+        Posn <- blotter::getPosQty(portfolioName, Symbol = symbol,
+                                   Date = current_date)
+        entrySig <- wts[current_date,symbol]
+        if (Posn != 0){ # If holding position, sell
+          if(is.na(exit_price)){
+            # last available price
+            exit_price <- sym[last(which(!is.na(sym[,exit_prefer]))),exit_prefer]
+          }
+          blotter::addTxn(portfolioName, Symbol=symbol, TxnDate=current_date,
+                          TxnPrice=exit_price, TxnQty=-Posn, TxnFees=0)
+        }
+        if ((entrySig != 0) & (equity > 0)){
+          if(is.na(enter_price)){
+            enter_price <- sym[last(which(!is.na(sym[,enter_prefer]))),
+                               enter_prefer]# last available price
+          }
+          qty <- as.numeric(
+            trunc((abs(equity)*wts[current_date,symbol])/enter_price))
+          blotter::addTxn(portfolioName, Symbol=symbol, TxnDate=current_date,
+                          TxnPrice=enter_price, TxnQty=qty, TxnFees=0)
+        }
+      }
+    } # End asset loop
+  } # End dates loop
+  # Final update after last transactions (last day only)
+  updatePortf(Portfolio=portfolioName, Dates=ind[length(ind)])
+  a <- list(getPortfolio(portfolioName))
   names(a) <- portfolioName
   return(a)
 }
@@ -605,6 +658,8 @@ get_weights_mr <- function(mranks, long_g, short_g, long_only=FALSE){
 #' returns the kth portfolio weights.
 #' @param holding_time If TRUE, entry weights only set if there is enough time
 #' left to fulfill entire holding period.
+#' @note might be worth including enddate as an argument rather than using the
+#' last date in mom. This aligns with the `place_transaction` functions.
 weights_i <- function(wts, start_i, k, holding_time=FALSE){
   p <- which(rowSums(abs(wts)) != 0)[1]
   month_index <- xts(matrix(c(rep(0,p-1),k:(nrow(wts)+k-p)),ncol=1),
