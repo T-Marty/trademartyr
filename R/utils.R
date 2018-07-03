@@ -508,3 +508,8 @@ portfolio_cumulative.return <- function(df, weights=NULL, rebalance_on=NULL,
     return(list(eq,c_mat))
   } else {return(eq)}
 }
+
+#' Calculate simple returns.
+simpleRets <- function(prices){
+  prices/xts::lag.xts(prices,k=1)-1
+}

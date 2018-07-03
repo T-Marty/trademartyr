@@ -46,6 +46,35 @@ momRankMembers <- function(df, n=6, s=0, hist_members=newHM, on="months",
   return(mom)
 }
 
+# Function to get momentum rankings over a number of periods.
+#' Can accommodate 'acceleration'.
+mom_rank <- function(DF, on="months",n=12,S=0,fromFirstDay=FALSE){
+  #DF is prices, not returns
+  #if fromFirstDay =1, it will be taken as first measurement (endpoint)
+  eps <- endpoints(DF,on=on,k=1)
+  if (fromFirstDay){eps[1] <- 1}
+  # if n is a vector, rank on 'acceleration' - the summation of returns over the
+  # specified horizons:
+  # "https://engineeredportfolio.com/2018/05/02/accelerating-dual-momentum-investing/"
+  if (length(n)>1){
+    K <- apply(array(n), 1,
+               FUN = function(x) na.omit(ROC(DF[eps,],n=x,type="discrete")))
+    mom <- K[[1]]
+    for (j in 2:length(K)){
+      mom <- mom+K[[j]]
+    }
+  }
+  else {
+    mom <- na.omit(ROC(DF[eps,],n=n,type="discrete"))
+  }
+  for (i in 1:nrow(mom)){
+    mom[i,] <- rank(-as.numeric(mom[i,]),ties.method = "first")
+  }
+  if (S != 0){mom <- lag.xts(mom,k=S)}
+  return(mom)
+}
+
+
 #' Function to get equal-weighted long-short position/weight vector from ranks.
 #' @description Takes an xts of ranks and returns an xts object containing
 #' position sizes (weights) for an equal weighted long-short portfolio.
@@ -574,12 +603,50 @@ get_weights_mr <- function(mranks, long_g, short_g, long_only=FALSE){
 
 #' Given an xts of portfolio weights with signals each period,
 #' returns the kth portfolio weights.
-weights_i <- function(wts, start_i, k){
+#' @param holding_time If TRUE, entry weights only set if there is enough time
+#' left to fulfill entire holding period.
+weights_i <- function(wts, start_i, k, holding_time=FALSE){
   p <- which(rowSums(abs(wts)) != 0)[1]
   month_index <- xts(matrix(c(rep(0,p-1),k:(nrow(wts)+k-p)),ncol=1),
                      order.by=index(wts))
   wt_ind <- month_index - start_i + 1
   wt_ind <- wt_ind[(wt_ind %% k == 0) & (wt_ind > 0),]
   wts_i <- wts[index(wt_ind),]
+  if(holding_time){
+    wts_i <- wts_i[holdingTime(index(wts_i),index(wts)[nrow(wts)],k), ]
+  }
   return(list(wts_i,wt_ind))
+}
+
+#' Function for visualising trades of overlapping J/S/K portfolios
+#' Mainl created for small number of entry/exit assets.
+visualise_trades <- function(weights, K_m, exits=TRUE){
+  tb <- as.data.frame(matrix(nrow=nrow(weights),ncol=K_m+1),
+                      stringsAsFactors = FALSE)
+  names(tb) <- c("Date",paste0("P",1:K_m))
+  tb$Date <- as.Date(index(weights))
+  for (i in 1:K_m){
+    tb[,i+1] <- ""
+    # Get entries for Kth portfolio
+    wts_i <- weights_i(weights,i,K_m)[[1]]
+    for (j in 1:nrow(weights)){
+      # Get date that corresponds to index j
+      dt <- as.Date(index(weights[j,]))
+      # Check if entry date for Kth portfolio
+      if(!(dt %in% as.Date(index(wts_i)))){next()}
+      long <- names(wts_i)[wts_i[dt,]>0]
+      short <- names(wts_i)[wts_i[dt,]<0]
+      st <- paste(paste0("+",long,collapse=" "),paste0("-",short,collapse=" "))
+      tb[j, i+1] <-   stringr::str_trim(paste(st,tb[j, i+1]))
+      if(exits){
+        if((j+K_m)<=nrow(weights)){
+          st_exit <- paste(paste0("-",long,collapse=" "),
+                           paste0("+",short,collapse=" "))
+          st_exit <- paste0("(",st_exit,")")
+          tb[j+K_m, i+1] <-   stringr::str_trim(paste(tb[j+K_m, i+1], st_exit))
+        }
+      }
+    }
+  }
+  return(tb)
 }
