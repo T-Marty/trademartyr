@@ -1,0 +1,322 @@
+---
+title: "Returns 6/0/6 Sector Momentum"
+author: "Tom Marty"
+output: 
+  html_document:
+    code_folding: hide
+    theme: yeti  #lumen, paper, sandstone, simplex, yeti
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Set up
+Load packages and functions.
+```{r message=FALSE, results='hide'}
+library(xts)
+library(lubridate)
+library(PerformanceAnalytics)
+library(readr)
+library(TTR)
+library(RColorBrewer)
+library(blotter)
+library(FinancialInstrument)
+library(parallel)
+library(foreach)
+library(doParallel)
+library(kableExtra)
+dataDir <- "~/Desktop/Momentum_tests/Bruce/data"
+functionDir <- "/home/ito/Desktop/PhD/Other_Courseware/trademartyr/R"
+sapply(file.path(functionDir,list.files(functionDir)),source,echo=FALSE)
+Sys.setenv(TZ = "UTC")
+```
+
+Load data and create an xts of close prices and another of returns. 
+The `clean_names` function just changes the names of the OHLC data for each of
+the assets, since the default names from Bloomberg are not recognised by
+blotter. The function also provides functionality for using adjusted returns
+and preserving an index membership column if required.
+
+```{r message=FALSE, cache=TRUE}
+assets <- gsub(".csv","",list.files(dataDir))
+load_files(dataDir,list.files(dataDir))
+clean_names(assets)
+DF <- get_cols(assets,"Close") # Prices
+DF_rets <- na.fill(simpleRets(DF),0) # Returns
+```
+
+## Strategy parameters
+Set strategy parameters. 
+
+```{r message=FALSE}
+TopN = 1
+nassets=length(assets)
+J_m=6
+S_m=0
+K_m=6
+starting_capital=1e06
+initEq <- starting_capital/K_m
+```
+
+## Generate positions
+Perform momentum ranking and get position weights for simple equal-weighted 
+long-short portfolio. Note that we can pass several formation periods to 
+`mom_rank` and it will rank based on acceleration--the average of the momentum 
+of the specified formation periods.
+
+```{r message=FALSE}
+mom <- mom_rank(DF, on="months", n=J_m, S=S_m)
+weights <- get_weights_ls(mom, TopN=TopN)
+```
+
+We can visualise the proposed entries and exits. This is probably only useful 
+when dealing with a small number of assets. Exits are shown in brackets.
+
+```{r message=FALSE}
+trades <- visualise_trades(weights, K_m)
+```
+
+```{r echo=FALSE}
+scroll_box(kable_styling(column_spec(kable(trades,caption="Ranks"),column = 1, 
+                                     width = "2.5cm"),
+                         bootstrap_options=c("striped","bordered")), 
+           width = "100%", height="200px")
+```
+
+## Return-based simulation
+As with all of our approaches, each of the K overlapping portfolios are 
+simulated separately. The `holding_time` parameter just indicates that we don't 
+enter a trade unless there is enough time left (in the data) to fulfill the 
+entire holding period.
+
+```{r , cache=TRUE}
+return_list <- list()
+for (start_i in 1:K_m){
+  wts_i <- weights_i(weights, start_i, K_m, holding_time=TRUE )[[1]]
+  rp <- portfolio_cumulative.return(DF_rets, weights=wts_i)
+  return_list[[start_i]] <- initEq*rp
+  names(return_list)[start_i] <- paste0("P",start_i)
+}
+rp_mat <- do.call(cbind, return_list); names(rp_mat) <- names(return_list)
+```
+
+## Blotter simulation
+When blotter references transaction and portfolio objects using a date range, it
+adjusts the righthand date such that it has a time of 23:59:59 ( specifically
+it uses a call like this `.parseISO8601(date_range)$last.time`. If the righthand
+date happens to be the last date in the data, blotter will throw a warning
+because it looks like we have asked for a date that isn't in the asset xts
+objects. There are a few ways to avoid this the safest is simply to,
+apped an extra day to to each of the objects. It doesn't matter that it will be
+empty as it won't be referenced.
+```{r }
+# Append 1 day extra to avoid annoying blotter range warning
+for (i in 1:length(assets)){
+  x <- get(assets[i])
+  x <- cbind(x,index(x)[nrow(x)]+days(1))
+  assign(assets[i], x)
+}
+```
+
+Set common blotter parameters.
+
+```{r message=FALSE, results='hide'}
+Currency="USD"
+currency(Currency)
+stock(assets,currency = Currency)
+enter_prefer="Close"
+exit_prefer="Close"
+ind <- index(weights)
+initdate <- ind[1] - days(1)
+enddate <- ind[length(ind)]
+```
+
+We perform the simulation in parallel. Blotter and financial instrument are
+called within each of the parallel environments, and the currency and stock
+instruments are loaded into whatever environment  the `FinancialInstrument`
+package sends them. If this is not done, blotter can't find them when updating
+the portfolios.
+
+```{r message=FALSE, results='hide', cache=TRUE}
+cores <- detectCores()
+mycluster <- makeCluster(cores-1,type = "FORK")
+registerDoParallel(mycluster)
+out <- foreach(
+  start_i = 1:K_m) %dopar% {
+    library(blotter)
+    library(FinancialInstrument)
+    currency(Currency)
+    stock(assets,currency = Currency)
+    place_transactions(initEq, assets, Currency, ind, start_i=start_i, K_m,
+                             wts=weights, initdate, enddate, holding_time=TRUE)
+  }
+stopCluster(mycluster)
+```
+
+### Extract blotter results
+
+```{r message=FALSE, results='hide', cache=TRUE}
+# Load portfolios into environment
+portf_names <- list()
+for (i in 1:length(out)){
+  portf_names[[i]] <- names(out[[i]])
+  put.portfolio(names(out[[i]]),out[[i]][[1]])
+}
+# Create combined account from individual portfolios
+accountName=paste0("acct_",J_m,S_m,K_m)
+suppressWarnings(rm(list=c(paste0("account.",accountName)), pos=.blotter))
+initAcct(name=accountName, portfolios=portf_names, initDate=initdate,
+         initEq=starting_capital)
+updateAcct(accountName)
+updateEndEq(accountName)
+```
+
+We can also view the actual transactions to make sure they are consistent with
+what we expected.
+
+```{r message=FALSE, cache=TRUE}
+txns <- txn_pretty(portfolio_list = unlist(portf_names))
+```
+
+```{r echo=FALSE}
+scroll_box(kable_styling(kable(txns),bootstrap_options =c("striped","bordered"))
+           ,width = "100%",height="600px")
+```
+
+## Compare results
+We compare each of the individual K portfolios.
+```{r message=FALSE, warning=FALSE, results='hide', cache=TRUE}
+# Me - blotter
+acct <- getAccount(accountName)
+# Bruce - blotter
+b_rets <- read_csv(file.path("~/Desktop/Momentum_tests/Bruce",
+                             "Bruces_returns.csv"))
+b_rets <- xts(b_rets[,-1],order.by = b_rets$X1)
+b_eq <- initEq*cumprod(1+b_rets[,1:K_m])
+```
+
+```{r fig.width=10}
+# Compare individual portfolios
+par(mfrow = c(K_m/2, 2))
+par(oma = c(4, 4, 0, 0))
+par(mar = c(0.25, 0.25, 0.25,.25))
+ylim=c(0.5e05,6e05)
+for(n in 1:K_m){
+  b_ind <- index(b_rets)[b_rets[,n]!=0]
+  eq_t <- out[[n]][[1]]$summary$Gross.Trading.PL
+  eq_t[1] <- initEq
+  eq_r <- rp_mat[,n]
+  Yaxt="n"
+  Xaxt="n"
+  Ylab=""
+  if(n %% 2 != 0){
+    Yaxt="t"
+  }
+  if(n > K_m-2){
+    Xaxt="t"
+  }
+  plot.zoo(cbind(b_eq[,n],cumsum(eq_t), eq_r)[b_ind],
+           col =c("darkorange3","cyan4","black") ,screens = 1,
+           lty=c("solid", "dashed", "dotted"),
+           lwd=2, xlab="", ylab="", xaxt=Xaxt, yaxt=Yaxt, ylim = ylim)
+  legend("topleft",legend = c("Bruce","Tom", "return-based"),lwd=2,
+         col=c("darkorange3","cyan4", "black"),
+         lty=c("solid","dashed","dotted"), cex=1)
+  if(n==trunc(K_m/2)){
+    mtext(paste("Equity ($)"), side = 2, line = 2.2, adj = 0.5, cex = 1,
+          col = "black")
+  }
+  mtext(paste("Portfolio",n), side = 3, line = -1.5, adj = 0.5, cex = .8,
+        col = "black")
+}
+```
+
+Here we compare combined portfolios. Bruces looks different because he updated 
+his portfolios on different dates (only at transactions), so the curve only 
+shows fluctuations from one portfolio at a time (and only on months).
+
+```{r fig.width=10}
+par(mfrow = c(1,1))
+t_port <- acct$summary$End.Eq
+b_port <- xts(rowSums(b_eq),order.by=index(b_eq))
+r_port <- xts(rowSums(rp_mat),index(rp_mat))
+plot.zoo(cbind(b_port,t_port, r_port)[index(b_port)],
+         col =c("darkorange3","cyan4","black") ,screens = 1,
+         lty=c("solid", "dashed", "dotted"),
+         lwd=2, xlab="", ylab="Account Equity", main = "Combined Portfolio")
+legend("topleft",legend = c("Bruce","Tom", "return-based"),lwd=2,
+       col =c("darkorange3","cyan4", "black"), lty=c("solid","dashed","dotted"),
+       cex=0.8)
+
+```
+
+Here we compare Tom's blotter results with the return-based results at a greater 
+granularity (daily).
+```{r fig.width=10}
+plot.zoo(cbind(t_port, r_port),
+         col =c("cyan4","black") ,screens = 1,
+         lty=c("dashed", "dotted"),
+         lwd=2, xlab="", ylab="Account Equity", main = "Combined Portfolio")
+legend("topleft",legend = c("Tom", "return-based"),lwd=2,
+       col =c("cyan4", "black"), lty=c("dashed","dotted"),
+       cex=0.8)
+
+```
+
+
+
+<!-- ## Results -->
+<!-- View the positions for each of the overlapping portfolios. -->
+
+<!-- ```{r } -->
+<!-- scroll_box(kable_styling(kable(tb),bootstrap_options =c("striped","bordered")) -->
+<!--            ,width = "100%",height="600px") -->
+<!-- ``` -->
+
+<!-- View results. -->
+
+<!-- ```{r figure.width=7,out.width='100%',eval=TRUE,echo=TRUE} -->
+<!-- darkcols <- brewer.pal(K_m,"Dark2") -->
+<!-- plot.zoo(cumprod(1+na.fill(Strat_list,0)),col = darkcols,screens = 1, -->
+<!--          xlab="",ylab="Cumulative Return",main="Individual Overlapping Portfolios") -->
+<!-- legend("topleft",legend = paste0("K_",1:K_m),lwd=1,col = darkcols,cex=0.8) -->
+<!-- ``` -->
+
+<!-- ```{r ,figure.width=7,out.width='100%',message=FALSE,eval=TRUE,echo=TRUE} -->
+<!-- RP <- Return.portfolio(na.fill(Strat_list,0)) # Not just overlapping portion -->
+<!-- plot.zoo(cumprod(1+RP), col = "black",screens = 1, lwd=2, -->
+<!--          xlab="",ylab="Cumulative Return",main="Combined Overlapping Portfolio") -->
+<!-- ``` -->
+
+<!-- ```{r ,figure.width=7,out.width='100%',message=FALSE,eval=TRUE,echo=TRUE} -->
+<!-- setCols <- brewer.pal(nassets+1,"Paired") -->
+<!-- setCols[nassets+1] <- "black" -->
+<!-- plot.zoo(cumprod(1+na.omit(cbind(DF_rets,RP))), col = setCols,screens = 1, lwd=2, -->
+<!--          xlab="",ylab="Cumulative Return",main="Assets") -->
+<!-- legend("topleft",legend = c(names(DF_rets),"Strategy"),lwd=2, -->
+<!--        col=setCols,cex=0.8) -->
+<!-- ``` -->
+
+<!-- ```{r figure.width=7,out.width='100%',eval=TRUE,echo=TRUE} -->
+<!-- RP_long <- Return.portfolio(na.fill(Long_list,0)) # Not just overlapping portion -->
+<!-- RP_short <- Return.portfolio(na.fill(Short_list,0)) # Not just overlapping portion -->
+<!-- BH <- Return.portfolio(cbind(RP_long,RP_short)) -->
+<!-- plot.zoo(cumprod(1+cbind(RP_long,RP_short,BH)),col = c("cyan4","darkorange3","black"),screens = 1, -->
+<!--          xlab="",ylab="Cumulative Return",main=" Buy-and-hold Long and Short Legs",  -->
+<!--          lwd=2) -->
+<!-- legend("topleft",legend = c("Long side","Short side","Buy-hold combined"),lwd=2, -->
+<!--        col=c("cyan4","darkorange3","black"),cex=0.8) -->
+<!-- ``` -->
+
+<!-- ## Extra -->
+<!-- Below I plot the portfolio that would result if the long and short legs were treated  -->
+<!-- as equal-weighted buy and hold positions (above), in relation to the other assets.  -->
+<!-- This is a bit closer to Bruce's result which makes no sense to me.  -->
+
+<!-- ```{r ,figure.width=7,out.width='100%',message=FALSE,eval=TRUE,echo=TRUE} -->
+<!-- plot.zoo(cumprod(1+na.omit(cbind(DF_rets,BH))), col = setCols,screens = 1, lwd=2, -->
+<!--          xlab="",ylab="Cumulative Return",main="Assets") -->
+<!-- legend("topleft",legend = c(names(DF_rets),"Buy-hold combined"),lwd=2, -->
+<!--        col=setCols,cex=0.8) -->
+<!-- ``` -->
