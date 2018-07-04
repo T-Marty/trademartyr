@@ -99,86 +99,6 @@ get_weights_ls <- function(ranks, TopN){
   return(wts)
 }
 
-#' Function for getting the final day of asset membership with data.
-#' @description Finds the last trading day (with recorded data) for each asset
-#' each period (e.g. month).
-#' @details Returns a dataframe with sepearate `Date` column. This is last day
-#' of the given trading period. The remaining columns are the asset columns.
-#' The asset columns contain the last trading date for the given month, for
-#' which the asset was a member.
-#' @param df xts object containing price series of assets to rank. Every column
-#' will be treated as an independent asset. Column names of assets to rank must
-#' also appear in column names of `hist_members`
-#' @param membership If FALSE will ignore asset membership and return last day
-#' of period with data.
-#' @param hist_members xts object containing membership data. Column names are
-#' assumed to be asset names corresponding to those in df. Note: All entries
-#' not NA are assumed to represent active membership.
-#' @param on Desired return periodicity (string). Passed to xts::endpoints.
-#' Ignored if `ind` is provided.
-#' @param ind Optional date series to use as period end points. Used in place
-#' of `ind`.
-#' @note Needs error for when `ind` doesn't match index(df). If no longer member
-#' still want to return last traded day, not just NA. Too slow, only go to
-#' last day with data.
-#' @importFrom zoo index
-#' @export
-txn_dates <- function(df, membership=TRUE, hist_members=newHM,
-                                 on="months", ind=NULL){
-  if(is.null(ind)){
-    eps <- xts::endpoints(df,on=on)
-    eps[1] <- 1 # New added! If it breaks, try without this!
-    ind <- index(df)[eps]
-  } else {
-    ind <- ind
-  }
-  dym <- as.data.frame(matrix(NA,nrow=length(ind),ncol=ncol(df)))
-  names(dym) <- names(df)
-  dym$Date <- ind
-  if (membership){
-    # Ensure asset names in membership only contain those in df
-    hist_members <- hist_members[,
-                                 base::intersect(names(hist_members),names(df))]
-    for (i in 1:length(ind)){
-      if (i==1){
-        drange <- paste0(index(df)[1],"/",ind[i])
-      } else {drange <- paste0(ind[i-1]+days(1),"/",ind[i])}
-      df_sub <- df[drange]
-      mem_sub <- hist_members[drange]
-      for(j in 1:ncol(df)){
-        sym <- names(df)[j]
-        # last day with membership and price data
-        with_data <- as.Date(index(df_sub)[which(!is.na(df_sub[,sym]))])
-        with_membership <- as.Date(index(mem_sub)[which(!is.na(mem_sub[,sym]))])
-        commn <- intersect(with_data,with_membership)
-        if (length(commn)==0){next()}
-        dym[i,sym] <- max(commn)
-      }
-    }
-    for (i in 1:ncol(dym)){
-      dym[,i] <- as.Date(dym[,i])
-    }
-    return(dym)
-  } else{
-    for (i in 1:length(ind)){
-      if (i==1){
-        drange <- paste0(index(df)[1],"/",ind[i])
-      } else {drange <- paste0(ind[i-1]+days(1),"/",ind[i])}
-      df_sub <- df[drange]
-      for(j in 1:ncol(df)){
-        sym <- names(df)[j]
-        with_data <- as.Date(index(df_sub)[which(!is.na(df_sub[,sym]))])
-        if (length(with_data)==0){next()}
-        dym[i,sym] <- max(with_data)
-      }
-    }
-    for (i in 1:ncol(dym)){
-      dym[,i] <- as.Date(dym[,i])
-    }
-    return(dym)
-  }
-}
-
 #' Function to simulate an individual (1 of K) momentum portfolio.
 #' @description Function to simulate an individual (1 of K) momentum portfolio.
 #' This function assumes rebalancing/exits occur on same day of entries,
@@ -508,7 +428,25 @@ multiRank <- function(Vars,groupings){
 }
 
 
-#' Need to double check!!
+#' Function for getting the final day of asset membership with data.
+#' @description Finds the last trading day (with recorded data) for each asset
+#' each period (e.g. month).
+#' @details Returns a dataframe with sepearate `Date` column. This is last day
+#' of the given trading period. The remaining columns are the asset columns.
+#' The asset columns contain the last trading date for the given month, for
+#' which the asset was a member.
+#' @param df xts object containing price series of assets to rank. Every column
+#' will be treated as an independent asset. Column names of assets to rank must
+#' also appear in column names of `hist_members`
+#' @param membership If FALSE will ignore asset membership and return last day
+#' of period with data.
+#' @param hist_members xts object containing membership data. Column names are
+#' assumed to be asset names corresponding to those in df. Note: All entries
+#' not NA are assumed to represent active membership.
+#' @param on Desired return periodicity (string). Passed to xts::endpoints.
+#' Ignored if `ind` is provided.
+#' @param ind Optional date series to use as period end points. Used in place
+#' of `ind`.
 #' @note Much of the apparant complexity/ugliness in this fuction is to deal
 #' with the case in which there is no price data in the current month. We could
 #' just return an NA in all these cases, but there is the special case in which
@@ -518,7 +456,8 @@ multiRank <- function(Vars,groupings){
 #' could have entered such a position, and then have no reference point for
 #' exit price or date the next period when we realise there is no longer
 #'  membership or data.
-txn_dates2 <- function(df, membership=TRUE, hist_members=newHM,
+#' @importFrom zoo index
+txn_dates <- function(df, membership=TRUE, hist_members=newHM,
                        on="months", ind=NULL){
   if(is.null(ind)){
     eps <- xts::endpoints(df,on=on)
@@ -704,4 +643,35 @@ visualise_trades <- function(weights, K_m, exits=TRUE){
     }
   }
   return(tb)
+}
+
+#' Function to replace asset returns for non-index members with zero. Used to
+#' simulate moving to cash for returns-based simulations.
+#' @param hist_members xts object containing membership data. Column names are
+#' assumed to be asset names corresponding to those in df. Note: All entries
+#' not NA are assumed to represent active membership.
+#' #' @param df xts object containing price series of assets to rank. Every column
+#' will be treated as an independent asset. Column names of assets to rank must
+#' also appear in column names of `hist_members`
+#' @details For the blotter simulation
+#' we exit any position for which the asset loses index membership and put that
+#' money in cash. For the returns-based simulation we can not do this
+#' explicitly without rebalancing all positions, which we do not want to do.
+#' However, we can simulate going to cash for that asset only, by assumming it
+#' generates zero return while it is not a member. That way, if we are holding
+#' the asset and it loses membership, it is as if we went to cash.
+#' The function will also replace missing returns (NAs) with zero.
+member_exit <- function(df, hist_members=newHM){
+  # DF is assumed to be returns, NOT prices.
+  # Forces zero return while not a member.
+  # Robust solution to assets that enter,
+  # exit, and enter again during simulation period.
+  for (i in 1:ncol(df)){
+    x <- df[,i]
+    mem <- hist_members[as.Date(index(df)),names(df)[i]]
+    mem[is.na(mem)] <- 0
+    x <- x*mem
+    df[,i] <- x
+  }
+  return(df)
 }

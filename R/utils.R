@@ -192,6 +192,7 @@ holdingTime <- function(current_date,end_date,holding_time,holding_unit="month")
 #' DF_cl <- get_cols(sp500,"Close")
 #' ptext <- "naFillFrom(df=DF_cl[,i_1:i_2], ind=master_ind)"
 #' DF_cl <- run_parallel(n=ncol(DF_cl), ptext=ptext)
+#' @note Should wrap in tryCatch to close out cluster even if error
 run_parallel <- function(n, ptext, chunk_size=NULL){
   cores <- parallel::detectCores()
   if (is.null(chunk_size)){
@@ -448,7 +449,7 @@ get_firm_data <- function(firm_saveDir, firmDir, priceDir, assets, ind=NULL){
 #' from PerformanceAnalytics, can handle long-short portfolios. Returns equity
 #' curve as opposed to returns.
 portfolio_cumulative.return <- function(df, weights=NULL, rebalance_on=NULL,
-                                        verbose=FALSE){
+                                        verbose=FALSE, zero_cut=TRUE){
   if(!("xts" %in% class(df))|!("zoo" %in% class(df))){
     stop("df must be an xts or zoo object.")
   }
@@ -493,6 +494,7 @@ portfolio_cumulative.return <- function(df, weights=NULL, rebalance_on=NULL,
   c_mat[index(weights)[1],] <- w_pos[1,]
   bop <- 1 #initialise beginning of period wealth
   for (i in 1:nrow(weights)){
+    if(bop <= 0){if(zero_cut){next()}}
     from = as.Date(index(weights[i,]))+1
     if (i == nrow(weights)){
       to = as.Date(last(index(df)))
@@ -517,4 +519,32 @@ portfolio_cumulative.return <- function(df, weights=NULL, rebalance_on=NULL,
 #' Calculate simple returns.
 simpleRets <- function(prices){
   prices/xts::lag.xts(prices,k=1)-1
+}
+
+#' Function to attribute news items to the correct trading day
+allocate_news <- function(d_n, nyse=TRUE, eod_h=16, eod_tz="EST", ind=NULL){
+  # get date times
+  ind1 <- index(d_n)
+  # convert date times to exchange local time
+  ind1 <- with_tz(ind1, tzone=eod_tz)
+  # get date version of ind1 (required as can't mix dates and posixct in index)
+  ind2 <- as.Date(ind1, tz=eod_tz)
+  # News released after cob is attributed to next day
+  ind2[hour(ind1) >= eod_h] <- ind2[hour(ind1) >= eod_h] + days(1)
+  if(nyse){
+    master_ind <- as.Date(nyse_trading_dates(ind1[1],
+                                             ind1[length(ind1)]+days(5)))
+  } else {
+    if(is.null(ind)){
+      stop("Must provide own index of business days unless assuming NYSE")
+    }
+    master_ind <- ind
+  }
+  # News occuring on non-business days is attributed to next business day
+  nb <- which(!(ind2 %in% master_ind))
+  for ( i in nb){
+    ind2[nb[i]] <- master_ind[(master_ind > ind2[nb[i]])][1]
+  }
+  index(d_n) <- ind2
+  return(d_n)
 }
