@@ -548,3 +548,65 @@ allocate_news <- function(d_n, nyse=TRUE, eod_h=16, eod_tz="EST", ind=NULL){
   index(d_n) <- ind2
   return(d_n)
 }
+
+#' Function to calculate daily news scores from xts of news data
+daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
+  news_type <- tolower(news_type)
+  if(!(news_type %in% c("all", "combined", "stories", "alerts"))){
+    warning(paste('news_type must be one of "all", "combined", "stories",',
+                  'or "alerts". Assuming "all".'))
+    news_type <- "all"
+  }
+  if(is.null(ind)){ind <- unique(index(dn))}
+  tm <- index(dn)
+  dn <- as.data.frame(dn)
+  dn$date <- tm
+  row.names(dn)<- NULL
+  dn <- subset(dn, relevance >= min_relevance)
+  dn <- group_by(dn, date)
+  if(news_type =="all"){
+    sms <- summarise(subset(dn, urgency==3), stories=n(),
+                     s_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                     /sum(relevance))
+    sma <- summarise(subset(dn, urgency==1), alerts=n(),
+                     a_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                     /sum(relevance))
+    smt <- summarise(dn,
+                     t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                     /sum(relevance))
+    sms <- xts(sms[,setdiff(names(sms),"date")],order.by = as.Date(sms$date))
+    sma <- xts(sma[,setdiff(names(sma),"date")],order.by = as.Date(sma$date))
+    smt <- xts(smt[,setdiff(names(smt),"date")],order.by = as.Date(smt$date))
+    dc <- cbind(cbind(smt,sms,sma),ind)
+    dc$stories[is.na(dc$stories)] <- 0
+    dc$alerts[is.na(dc$alerts)] <- 0
+    return(dc)
+  }
+  if(news_type =="combined"){
+    smt <- summarise(dn,
+                     t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                     /sum(relevance),n=n())
+    smt <- xts(smt[,setdiff(names(smt),"date")],order.by = as.Date(smt$date))
+    smt <- cbind(smt,ind)
+    smt$n[is.na(smt$n)] <- 0
+    return(smt)
+  }
+  if(news_type =="stories"){
+    sms <- summarise(subset(dn, urgency==3), stories=n(),
+                     s_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                     /sum(relevance))
+    sms <- xts(sms[,setdiff(names(sms),"date")],order.by = as.Date(sms$date))
+    sms <- cbind(sms,ind)
+    sms$stories[is.na(sms$stories)] <- 0
+    return(sms)
+  }
+  if(news_type =="alerts"){
+    sma <- summarise(subset(dn, urgency==1), alerts=n(),
+                     a_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                     /sum(relevance))
+    sma <- xts(sma[,setdiff(names(sma),"date")],order.by = as.Date(sma$date))
+    sma <- cbind(sma,ind)
+    sma$alerts[is.na(sma$alerts)] <- 0
+    return(sma)
+  }
+}
