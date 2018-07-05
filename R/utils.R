@@ -8,12 +8,12 @@
 #' @param daterange The date range of resulting xts to be loaded (string).
 #' @return An xts object.
 #' @export
-readxts2 <- function(dir, fname, index.col="Date", daterange=NULL, sep=","){
-  x <- read.csv(file.path(dir,fname),header=TRUE,sep=sep)
+readxts2 <- function(dir, fname, index.col="Date", daterange=NULL, delim=","){
+  x <- read_delim(file.path(dir,fname), delim=delim)
   index.col <- names(x)[grep(index.col,names(x),ignore.case = TRUE)]
-  x[[index.col]] <- as.POSIXct(x[[index.col]])
+  #x[[index.col]] <- as.POSIXct(x[[index.col]])
   x<-as.xts(x[,which(names(x) != index.col)],order.by=x[[index.col]])
-  indexFormat(x)<-"%Y-%m-%d"
+  #indexFormat(x)<-"%Y-%m-%d"
   if(!is.null(daterange)){
     x <- x[daterange]
   }
@@ -32,10 +32,10 @@ readxts2 <- function(dir, fname, index.col="Date", daterange=NULL, sep=","){
 #' @return NULL
 #' @export
 load_files <- function(dir, fnames, index.col="date", daterange=NULL,
-                      envir=globalenv(), sep=","){
+                      envir=globalenv(), delim=","){
   for (i in 1:length(fnames)){
     x <- readxts2(dir,fnames[i], index.col = index.col,
-                  daterange=daterange, sep=sep)
+                  daterange=daterange, delim=delim)
     symbol <- gsub('\\..*', "", fnames[i])
     symbol <- gsub(" ", "", symbol)
     assign(symbol, x, envir=envir)
@@ -542,7 +542,7 @@ allocate_news <- function(d_n, nyse=TRUE, eod_h=16, eod_tz="EST", ind=NULL){
   }
   # News occuring on non-business days is attributed to next business day
   nb <- which(!(ind2 %in% master_ind))
-  for ( i in nb){
+  for ( i in 1:length(nb)){
     ind2[nb[i]] <- master_ind[(master_ind > ind2[nb[i]])][1]
   }
   index(d_n) <- ind2
@@ -609,4 +609,32 @@ daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
     sma$alerts[is.na(sma$alerts)] <- 0
     return(sma)
   }
+}
+
+#' Make to handle combined news xts?? That way can use centered vars
+#' Currently weights each sentiment day for each asset by relative the recency
+#' of the sentiment day with respect to the assets own news history *not*
+#' relative to absolute recency.
+#' @param  dn combined xts of daily news measure for multiple assets. e.g.
+#' get_cols applied to output of `daily_news_scores`
+news_agg <- function(dn, n=1, w=1, on="months", ind=NULL, from_first=TRUE){
+  if(!is.null(ind)){dn <- cbind(dn,ind)}
+  eps <- endpoints(dn, on=on)
+  if (from_first) {eps[1] <- 1} else { eps <- eps[2:length(eps)]}
+  nmat <- data.frame(matrix(nrow=length(eps),ncol = ncol(dn)))
+  nmat <- as.xts(nmat,order.by = ind[eps])
+  colnames(nmat) <- colnames(dn)
+  for (i in 1:(length(eps)-n)){
+    news_subset <- dn[eps[i]:eps[i+n],]
+    for (j in 1:ncol(dn)){
+      ns <- news_subset[,j]
+      if(sum(is.na(ns))==nrow(ns)){next()}
+      wt <- seq(1,w,length.out = nrow(ns))/w
+      ns$wt <- wt
+      ns <- na.omit(ns)
+      val <- sum(ns[,1]*ns$wt)/sum(ns$wt)
+      nmat[index(dn)[eps[i+n]],j] <- val
+    }
+  }
+  return(nmat)
 }
