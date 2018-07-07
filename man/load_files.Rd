@@ -5,7 +5,7 @@
 \title{Function to read csv files and load them as xts into selected environment.}
 \usage{
 load_files(dir, fnames, index.col = "date", daterange = NULL,
-  envir = globalenv(), sep = ",")
+  envir = globalenv(), delim = ",")
 }
 \arguments{
 \item{dir}{The directory in which the required files are stored (string)}

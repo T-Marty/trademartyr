@@ -7,7 +7,7 @@ from PerformanceAnalytics, can handle long-short portfolios. Returns equity
 curve as opposed to returns.}
 \usage{
 portfolio_cumulative.return(df, weights = NULL, rebalance_on = NULL,
-  verbose = FALSE)
+  verbose = FALSE, zero_cut = TRUE)
 }
 \description{
 Function to calculate portfolio equity given weights. Unlike the version

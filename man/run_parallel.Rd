@@ -9,6 +9,9 @@ run_parallel(n, ptext, chunk_size = NULL)
 \description{
 Function to perform commands in parallel
 }
+\note{
+Should wrap in tryCatch to close out cluster even if error
+}
 \examples{
 DF_cl <- get_cols(sp500,"Close")
 ptext <- "naFillFrom(df=DF_cl[,i_1:i_2], ind=master_ind)"

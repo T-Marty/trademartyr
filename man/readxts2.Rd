@@ -4,7 +4,7 @@
 \alias{readxts2}
 \title{Function to read csv files as xts objects.}
 \usage{
-readxts2(dir, fname, index.col = "Date", daterange = NULL, sep = ",")
+readxts2(dir, fname, index.col = "Date", daterange = NULL, delim = ",")
 }
 \arguments{
 \item{dir}{The directory in which the required file is stored (string)}

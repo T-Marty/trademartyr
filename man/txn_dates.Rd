@@ -36,7 +36,13 @@ The asset columns contain the last trading date for the given month, for
 which the asset was a member.
 }
 \note{
-Needs error for when `ind` doesn't match index(df). If no longer member
-still want to return last traded day, not just NA. Too slow, only go to
-last day with data.
+Much of the apparant complexity/ugliness in this fuction is to deal
+with the case in which there is no price data in the current month. We could
+just return an NA in all these cases, but there is the special case in which
+this is not ideal: If the last day with membership and/or price data falls on
+the end point of the previous period. Because positions are often evaluated
+and entered based on end-of-period points, there is the possibility that we
+could have entered such a position, and then have no reference point for
+exit price or date the next period when we realise there is no longer
+ membership or data.
 }
