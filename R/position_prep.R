@@ -322,13 +322,13 @@ place_transactions <- function(initEq, assets, Currency, ind, start_i=1, K_m=1,
 }
 
 #' Function to perform rank by an external (pre-calculated) variable, accounting
-#'  for membership.
-#'  @description Function to perform rank by an external (pre-calculated)
-#'  variable, accounting for membership. Analogous to `momRankMembers` but
-#'  assumes a pre-calculated variable, instead of calculating and ranking on
-#'  price momentum.
-#'  @param  dn xts object of variables ready to rank. Columns assumed to be
-#'  individual assets.
+#' for membership.
+#' @description Function to perform rank by an external (pre-calculated)
+#' variable, accounting for membership. Analogous to `momRankMembers` but
+#' assumes a pre-calculated variable, instead of calculating and ranking on
+#' price momentum.
+#' @param  dn xts object of variables ready to rank. Columns assumed to be
+#' individual assets.
 #' @param s Skip period (integer). This is the time between the variable
 #' calculation date (end of formation period) and ranking
 #' (and presumably investment) date.
@@ -336,7 +336,7 @@ place_transactions <- function(initEq, assets, Currency, ind, start_i=1, K_m=1,
 #' are assumed to be asset names corresponding to those in df. Note: All entries
 #' not NA are assumed to represent active membership.
 #' @importFrom zoo index
-VarRankMembers <- function(dn, s=0, hist_members = newHM){
+var_rank_members <- function(dn, s=0, hist_members = newHM){
   # dn is xts of variables (such as news). Cols are stocks.
   rmat <- as.xts(matrix(0,ncol=ncol(dn),nrow=nrow(dn)),order.by=index(dn))
   names(rmat) <- names(dn)
