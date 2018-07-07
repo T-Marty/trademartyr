@@ -186,8 +186,8 @@ holdingTime <- function(current_date,end_date,holding_time,holding_unit="month")
 }
 
 #' Function to perform commands in parallel
-#' @import foreach foreach
-#' @import foreach %dopar%
+#' @importFrom foreach foreach
+#' @importFrom foreach %dopar%
 #' @examples
 #' DF_cl <- get_cols(sp500,"Close")
 #' ptext <- "naFillFrom(df=DF_cl[,i_1:i_2], ind=master_ind)"
@@ -205,7 +205,8 @@ run_parallel <- function(n, ptext, chunk_size=NULL){
   nums2 <- c(nums2[-1],n)
   mycluster <- parallel::makeCluster(cores-1,type = "FORK")
   doParallel::registerDoParallel(mycluster)
-  out <- foreach(z = 1:length(nums1)) %dopar% { # Begin iteration for chunk z
+  # Begin iteration for chunk z
+  out <- foreach(z = 1:length(nums1)) %dopar% {
     i_1 <- nums1[z]
     i_2 <- nums2[z]
     eval(parse(text=ptext))
@@ -494,7 +495,20 @@ portfolio_cumulative.return <- function(df, weights=NULL, rebalance_on=NULL,
   c_mat[index(weights)[1],] <- w_pos[1,]
   bop <- 1 #initialise beginning of period wealth
   for (i in 1:nrow(weights)){
-    if(bop <= 0){if(zero_cut){next()}}
+    # If equity is negative and zero_cut==TRUE, don't enter new positions
+    if(bop <= 0){
+      if(zero_cut){
+      #weights[i,] <- 0
+      from = as.Date(index(weights[i,]))+1
+      to = as.Date(last(index(df)))
+      drange <- paste0(from, "::", to)
+      eq <- xts(rowSums(c_mat),order.by = index(c_mat))
+      eq[drange] <- bop
+      if(verbose){
+        return(list(eq,c_mat))
+      } else {return(eq)}
+      }
+      }
     from = as.Date(index(weights[i,]))+1
     if (i == nrow(weights)){
       to = as.Date(last(index(df)))
@@ -504,7 +518,7 @@ portfolio_cumulative.return <- function(df, weights=NULL, rebalance_on=NULL,
     drange <- paste0(from, "::", to)
     returns = df[drange]
     cum_rets <- (cumprod(1+returns))
-    for (j in 1:ncol(cum_rets)){
+    for (j in which(weights[i,] != 0)){
       c_mat[drange,j] <- ((cum_rets[,j]-1)*as.numeric(weights[i,j])*abs(bop)
                           + as.numeric(w_pos[i,j])*bop)
     }
@@ -526,7 +540,7 @@ allocate_news <- function(d_n, nyse=TRUE, eod_h=16, eod_tz="EST", ind=NULL){
   # get date times
   ind1 <- index(d_n)
   # convert date times to exchange local time
-  ind1 <- with_tz(ind1, tzone=eod_tz)
+  ind1 <- lubridate::with_tz(ind1, tzone=eod_tz)
   # get date version of ind1 (required as can't mix dates and posixct in index)
   ind2 <- as.Date(ind1, tz=eod_tz)
   # News released after cob is attributed to next day
@@ -559,19 +573,19 @@ daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
   }
   if(is.null(ind)){ind <- unique(index(dn))}
   tm <- index(dn)
-  dn <- as.data.frame(dn)
+  dn <- as.data.frame(dn, stringsAsFactors=FALSE)
   dn$date <- tm
   row.names(dn)<- NULL
   dn <- subset(dn, relevance >= min_relevance)
-  dn <- group_by(dn, date)
+  dn <- dplyr::group_by(dn, date)
   if(news_type =="all"){
-    sms <- summarise(subset(dn, urgency==3), stories=n(),
+    sms <- dplyr::summarise(subset(dn, urgency==3), stories=n(),
                      s_sent=sum(relevance*(sentimentPositive-sentimentNegative))
                      /sum(relevance))
-    sma <- summarise(subset(dn, urgency==1), alerts=n(),
+    sma <- dplyr::summarise(subset(dn, urgency==1), alerts=n(),
                      a_sent=sum(relevance*(sentimentPositive-sentimentNegative))
                      /sum(relevance))
-    smt <- summarise(dn,
+    smt <- dplyr::summarise(dn,
                      t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
                      /sum(relevance))
     sms <- xts(sms[,setdiff(names(sms),"date")],order.by = as.Date(sms$date))
@@ -583,7 +597,7 @@ daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
     return(dc)
   }
   if(news_type =="combined"){
-    smt <- summarise(dn,
+    smt <- dplyr::summarise(dn,
                      t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
                      /sum(relevance),n=n())
     smt <- xts(smt[,setdiff(names(smt),"date")],order.by = as.Date(smt$date))
@@ -592,7 +606,7 @@ daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
     return(smt)
   }
   if(news_type =="stories"){
-    sms <- summarise(subset(dn, urgency==3), stories=n(),
+    sms <- dplyr::summarise(subset(dn, urgency==3), stories=n(),
                      s_sent=sum(relevance*(sentimentPositive-sentimentNegative))
                      /sum(relevance))
     sms <- xts(sms[,setdiff(names(sms),"date")],order.by = as.Date(sms$date))
@@ -601,7 +615,7 @@ daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
     return(sms)
   }
   if(news_type =="alerts"){
-    sma <- summarise(subset(dn, urgency==1), alerts=n(),
+    sma <- dplyr::summarise(subset(dn, urgency==1), alerts=n(),
                      a_sent=sum(relevance*(sentimentPositive-sentimentNegative))
                      /sum(relevance))
     sma <- xts(sma[,setdiff(names(sma),"date")],order.by = as.Date(sma$date))
@@ -617,12 +631,12 @@ daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
 #' relative to absolute recency.
 #' @param  dn combined xts of daily news measure for multiple assets. e.g.
 #' get_cols applied to output of `daily_news_scores`
-news_agg <- function(dn, n=1, w=1, on="months", ind=NULL, from_first=TRUE){
-  if(!is.null(ind)){dn <- cbind(dn,ind)}
-  eps <- endpoints(dn, on=on)
+aggregate_news <- function(dn, n=1, w=1, on="months", ind=NULL, from_first=TRUE){
+  if(!is.null(ind)){dn <- cbind(dn,ind); dn <- dn[ind]}
+  eps <- xts::endpoints(dn, on=on)
   if (from_first) {eps[1] <- 1} else { eps <- eps[2:length(eps)]}
   nmat <- data.frame(matrix(nrow=length(eps),ncol = ncol(dn)))
-  nmat <- as.xts(nmat,order.by = ind[eps])
+  nmat <- as.xts(nmat,order.by = index(dn)[eps])
   colnames(nmat) <- colnames(dn)
   for (i in 1:(length(eps)-n)){
     news_subset <- dn[eps[i]:eps[i+n],]
@@ -637,4 +651,18 @@ news_agg <- function(dn, n=1, w=1, on="months", ind=NULL, from_first=TRUE){
     }
   }
   return(nmat)
+}
+
+
+#' Temporary function to load and return news data and convert to xts
+#' (does not put in environment)
+load_news_file <- function(fDir, Fname, col_names = NULL){
+  if(is.null(col_names)){
+    col_names <- c("feedTimestamp","relevance","urgency","sentimentClass",
+                   "sentimentPositive","sentimentNegative")
+  }
+  x <- read_csv(file.path(trnaDir,paste0(assets[i],".csv")))
+  x <- x[,col_names]
+  x <- as.xts(x[,-which(names(x)=="feedTimestamp")],
+              order.by = x$feedTimestamp)
 }
