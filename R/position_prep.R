@@ -352,7 +352,7 @@ var_rank_members <- function(dn, s=0, hist_members = newHM){
   return(rmat)
 }
 
-multiRank <- function(Vars,groupings){
+multi_rank <- function(Vars, groupings){
   # Function sorts members into groupings for number of variables.
   # Vars should be a list of xts objects of ranked stocks where <=0 means not a member
   # i.e. output from momRankMembers. Groupings should be an array of the number of
@@ -381,6 +381,7 @@ multiRank <- function(Vars,groupings){
             warning(paste0("The number of assets to be ranked that have ",
                            "variable ",i," data is less than the number of ",
                            "desired groups: ",jdate))
+            next()
           }
           # breaks <- seq.int(0,length(groupMembers),trunc(length(groupMembers)/groupings[i]))
           # breaks[length(breaks)-1]<-breaks[length(breaks)-1]+length(groupMembers)-breaks[length(breaks)]
@@ -607,7 +608,7 @@ weights_i <- function(wts, start_i, k, holding_time=FALSE){
   wt_ind <- wt_ind[(wt_ind %% k == 0) & (wt_ind > 0),]
   wts_i <- wts[index(wt_ind),]
   if(holding_time){
-    wts_i <- wts_i[holdingTime(index(wts_i),index(wts)[nrow(wts)],k), ]
+    wts_i[!holdingTime(index(wts_i),index(wts)[nrow(wts)],k),] <- 0
   }
   return(list(wts_i,wt_ind))
 }
