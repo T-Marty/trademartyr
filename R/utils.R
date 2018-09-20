@@ -626,7 +626,7 @@ daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
 }
 
 #' Make to handle combined news xts?? That way can use centered vars
-#' Currently weights each sentiment day for each asset by relative the recency
+#' Currently weights each sentiment day for each asset by relative recency
 #' of the sentiment day with respect to the assets own news history *not*
 #' relative to absolute recency.
 #' @param  dn combined xts of daily news measure for multiple assets. e.g.
@@ -638,16 +638,28 @@ aggregate_news <- function(dn, n=1, w=1, on="months", ind=NULL, from_first=TRUE)
   nmat <- data.frame(matrix(nrow=length(eps),ncol = ncol(dn)))
   nmat <- as.xts(nmat,order.by = index(dn)[eps])
   colnames(nmat) <- colnames(dn)
-  for (i in 1:(length(eps)-n)){
-    news_subset <- dn[eps[i]:eps[i+n],]
-    for (j in 1:ncol(dn)){
-      ns <- news_subset[,j]
-      if(sum(is.na(ns))==nrow(ns)){next()}
-      wt <- seq(1,w,length.out = nrow(ns))/w
-      ns$wt <- wt
-      ns <- na.omit(ns)
-      val <- sum(ns[,1]*ns$wt)/sum(ns$wt)
-      nmat[index(dn)[eps[i+n]],j] <- val
+  if(w == 1){ # average
+    for (i in 1:(length(eps)-n)){
+      news_subset <- dn[(eps[i]+1):eps[i+n],]
+      for (j in 1:ncol(dn)){
+        ns <- news_subset[,j]
+        if(sum(is.na(ns))==nrow(ns)){next()}
+        val <- mean(ns,na.rm=TRUE)
+        nmat[index(dn)[eps[i+n]],j] <- val
+      }
+    }
+  } else{
+    for (i in 1:(length(eps)-n)){
+      news_subset <- dn[(eps[i]+1):eps[i+n],]
+      for (j in 1:ncol(dn)){
+        ns <- news_subset[,j]
+        if(sum(is.na(ns))==nrow(ns)){next()}
+        wt <- seq(1,w,length.out = nrow(ns))/w
+        ns$wt <- wt-max(0, wt[(which(!is.na(ns))[1]-1)])# Translation invariance
+        ns <- na.omit(ns)
+        val <- sum(ns[,1]*ns$wt)/sum(ns$wt)
+        nmat[index(dn)[eps[i+n]],j] <- val
+      }
     }
   }
   return(nmat)
@@ -665,4 +677,179 @@ load_news_file <- function(fDir, Fname, col_names = NULL){
   x <- x[,col_names]
   x <- as.xts(x[,-which(names(x)=="feedTimestamp")],
               order.by = x$feedTimestamp)
+}
+
+#' Function to calculate number of news days or number of news items over
+#' formation period.
+#' @param  dn combined xts of daily news measure for multiple assets. e.g.
+#' get_cols applied to output of `daily_news_scores`
+news_days <- function(dn, n=1, on="months", ind=NULL, from_first=TRUE,
+                      items=FALSE){
+  if(!is.null(ind)){dn <- cbind(dn,ind); dn <- dn[ind]}
+  eps <- xts::endpoints(dn, on=on)
+  if (from_first) {eps[1] <- 1} else { eps <- eps[2:length(eps)]}
+  nmat <- as.data.frame(matrix(0,ncol=ncol(dn),nrow=length(eps)))
+  nmat <- as.xts(nmat,order.by = index(dn)[eps])
+  colnames(nmat) <- colnames(dn)
+  if(items==FALSE){
+    for (i in 1:(length(eps)-n)){
+      news_subset <- dn[eps[i]:eps[i+n],]
+      for (j in 1:ncol(dn)){
+        ns <- news_subset[,j]
+        n_days <- sum(!is.na(ns))
+        nmat[index(dn)[eps[i+n]],j] <- n_days
+      }
+    }
+  } else{
+    for (i in 1:(length(eps)-n)){
+      news_subset <- dn[eps[i]:eps[i+n],]
+      for (j in 1:ncol(dn)){
+        ns <- news_subset[,j]
+        ns[is.na(ns),1]<-0
+        n_items <- sum(ns)
+        nmat[index(dn)[eps[i+n]],j] <- n_items
+      }
+    }
+  }
+  return(nmat)
+}
+
+#' Function to calculate forward return
+forward_return <- function(df,on="months",n=6,ind=NULL,backward=FALSE){
+  nms <- names(df)
+  if (is.null(ind)){
+    ind <- nyse_trading_dates(as.Date(index(df)[1]),
+                              as.Date(index(df)[nrow(df)]))
+  }
+  # merge with ind to ensure swapping indices later on is consistent.
+  df <- cbind(df,ind)
+  # Periodicity of return
+  if (on=="weeks") {
+    f = xts::to.weekly
+  } else {f = xts::to.monthly}
+  # Use the last available price for each period.
+  # Specifying "lastof" allows us to cbind results,
+  # since the last day of each period (rather than that of last data) is used.
+  df  <- lapply(1:ncol(df),FUN=function(x){
+    f(na.omit(df[,x]),indexAt="lastof",OHLC=FALSE)})
+  df <- do.call(cbind,df)
+  eps <- endpoints(ind,on=on,k=1)[-1]
+  # Change from last day of each period to last trading day
+  index(df) <- ind[eps]
+  # Calculate n-period return
+  df <- ROC(df,n=n,type="discrete")
+  if(backward) {names(df) <- nms; return(df)}
+  
+  df[1:(nrow(df)-n),] <- as.matrix(df[(n+1):nrow(df),])
+  df[(nrow(df)-n+1):nrow(df),] <- NA
+
+  names(df) <- nms
+  return(df)
+}
+
+#' Function to median-centre aggregated news sentiment and
+#' zero-fill no-news stocks (missing values) for index members.
+median_adjust_deprecated <- function(ns,hist_members=newHM){
+  #ns is temporally aggregated (not daily) sentiment scores
+  #med_sent <- xts(rep(0,nrow(ns)),order.by = index(ns))
+  #names(med_sent) <- c("median_sent")
+  ns_adj <- ns
+  for (i in 1:nrow(ns_adj)){
+    idate <- as.Date(index(ns)[i])
+    if(sum(is.na(ns[idate,]))==ncol(ns)){next()}
+    members <- names(hist_members)[which(!is.na(hist_members[idate,]))]
+    members_with_data <- members[!is.na(as.numeric(ns[idate,members]))]
+    if(length(members_with_data)==0){next()}
+    ms <- median(ns[idate,members_with_data],na.rm = TRUE)
+    #med_sent[idate,1] <- ms
+    ns_adj[idate,members_with_data] <- as.numeric(ns[idate,members_with_data])-ms
+    ns_adj[idate,is.na(ns_adj[idate,])] <- 0
+  }
+  return(ns_adj)
+}
+
+#' Function to median-centre aggregated news sentiment and
+#' zero-fill no-news stocks (missing values) for index members.
+#' Note: this function relies on hist_members containing NAs
+#' to represent non-membership (as output by Bloomberg wrappers)
+#' Note also that news data for all non-members will be zero.
+median_adjust <- function(ns,hist_members=newHM,func=median){
+  hist_members <- hist_members[index(ns),names(ns)]
+  ns <- ns*hist_members # This makes non-member news data NA
+  ns <- ns-apply(ns,1,func,na.rm=TRUE)
+  # Fill all NAs with zeros, but make non-members NA again, since they were not
+  # median-adjusted and their zero-values will be meaningless.
+  ns <- zoo::na.fill(ns,0)*hist_members
+  return(ns)
+}
+  
+fillFwd <- function(df,colname){
+  pts <- which(!is.na(df[,colname]))
+  if (length(pts) > 1){
+    for (i in 1:(length(pts)-1)){
+      if ((pts[i]+1)==pts[i+1]){next()}
+      df[(pts[i]+1):(pts[i+1]-1),colname] <- df[pts[i],colname]
+    }
+  }
+  if (length(pts) >= 1){
+    if(pts[length(pts)] != nrow(df)){
+      df[(pts[length(pts)]+1):nrow(df),colname] <- df[pts[length(pts)],colname]
+    }
+  }
+  return(df)
+}
+
+#' New much, much faster function to calculated cumulative long-short portfolio 
+#' returns.
+rp_cum_rets <-  function(wts,df_rets,stop_loss=NULL){
+  bop=1
+  eq <- xts(matrix(nrow=nrow(df_rets),ncol = 1),order.by = index(df_rets))
+  for (i in 1:nrow(wts)){
+    if( sum(abs(wts[i,]),na.rm = TRUE) == 0 ){next()}
+    sdate=as.Date(index(wts)[i])+1
+    if(sdate >= last(index(df_rets))){next()}
+    if(i == nrow(wts)){
+      edate = as.Date(last(index(df_rets)))
+    } else { edate=as.Date(index(wts)[i+1]) }
+    drange=paste0(sdate,"::",edate)
+    # Short side
+    short_syms <- names(wts)[which(wts[i,] < 0)]
+    s_ret=0
+    wts_sum_s=0
+    if (length(short_syms)!=0){
+      short_wts <- as.numeric(abs(wts[i,short_syms]))
+      wts_sum_s <- sum(short_wts)
+      s_ret <- apply(cumprod(1+df_rets[drange,short_syms]),1,
+                     weighted.mean,w=short_wts)
+      #s_ret <- xts(s_ret,order.by = index(df_rets[drange,]))
+      s_ret <- -(s_ret*wts_sum_s)
+    }
+    l_ret=0
+    long_syms <- names(wts)[which(wts[i,] > 0)]
+    wts_sum_l=0
+    if (length(long_syms)!=0){
+      long_wts <- as.numeric(abs(wts[i,long_syms,]))
+      wts_sum_l <- sum(long_wts)
+      l_ret <- apply(cumprod(1+df_rets[drange,long_syms]),1,
+                     weighted.mean,w=long_wts)
+      #l_ret <- xts(l_ret,order.by = index(df_rets[drange,]))
+      l_ret <- l_ret*wts_sum_l
+    }
+    lsm <- xts((l_ret+s_ret),order.by = index(df_rets[drange,]))
+    #eq[drange] <- bop*(l_ret+s_ret)+bop
+    if(!is.null(stop_loss)){
+      if(min(lsm) <= -1*stop_loss){
+        ws <- which(lsm <= -1*stop_loss)[1]
+        lsm[ws:length(lsm)] <- lsm[ws]
+      }
+    }
+    eq[drange] <- bop*(lsm+1-(wts_sum_l-wts_sum_s))
+    bop <- as.numeric(last(eq[drange]))
+    if (bop <= 0){
+      ws <- which(eq <= 0)[1]
+      eq[ws:nrow(eq)] <- 0
+      return(eq)
+    }
+  }
+  return(eq)
 }

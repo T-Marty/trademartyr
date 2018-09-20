@@ -84,7 +84,7 @@ mom_rank <- function(DF, on="months",n=12,S=0,fromFirstDay=FALSE){
 #' Total number of assets held each period will be TopN*2
 #' #' @importFrom zoo index
 #' @export
-get_weights_ls <- function(ranks, TopN){
+get_weights_ls <- function(ranks, TopN, long_only=FALSE){
   #--- Create long position signals
   long <- (ranks[index(ranks), ] <= TopN) & (ranks[index(ranks), ] > 0)
   long[index(long), ] <- as.numeric(long)
@@ -96,6 +96,7 @@ get_weights_ls <- function(ranks, TopN){
   short[index(long),] <- -as.numeric(short)
   #--- Create equal weights
   wts <- (long+short)/TopN
+  if (long_only){ wts <- long/TopN }
   return(wts)
 }
 
