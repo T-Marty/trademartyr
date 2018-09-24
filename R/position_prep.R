@@ -550,6 +550,7 @@ txn_dates <- function(df, membership=TRUE, hist_members=newHM,
 #' mr <- multiRank(Vars=list(momentum_ranks, news_ranks), groupings = c(5,3))
 #' wts <- get_weights(mr, long_g=c(1,1), short_g=c(5,3))
 get_weights_mr <- function(mranks, long_g, short_g, long_only=FALSE){
+  nms <- names(mranks[[1]])
   if(long_only){
     if (length(mranks) != length(long_g)){
       stop('Length of long_g must equal the number of variables in
@@ -566,6 +567,7 @@ get_weights_mr <- function(mranks, long_g, short_g, long_only=FALSE){
     # Equal weight
     n_l <- rowSums(li)
     wts <- na.fill(li/n_l, 0)
+    names(wts) <- nms
     return(wts)
   } else {
     if ((length(mranks) != length(long_g))|(length(long_g) != length(short_g))){
@@ -591,6 +593,7 @@ get_weights_mr <- function(mranks, long_g, short_g, long_only=FALSE){
     si <- na.fill(si/n_s, 0)
     # Long short portfolio weights
     wts <- li-si
+    names(wts) <- nms
     return(wts)
   }
 }

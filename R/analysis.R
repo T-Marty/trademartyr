@@ -1,9 +1,9 @@
-#' Function to form panel data from a portfolio equity matrix. A precursor 
+#' Function to form panel data from a portfolio equity matrix. A precursor
 #' to performing robust regression between portfolio legs.
 panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
   if(is.null(names(rpmat))){names(rpmat) <- paste(1:ncol(rpmat))}
   inames <- names(ind_mat)
-  
+
   if(sum(class(ind_mat)=="data.frame")==0){
     tm <- index(ind_mat)
     ind_mat <- as.data.frame(ind_mat)
@@ -12,7 +12,6 @@ panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
       ind_mat$date <- zoo::as.yearmon(ind_mat$date)
     }
   }
-  
   rp_list <- list()
   for (i in 1:ncol(rpmat)){
     x <- na.omit(rpmat[,i])
@@ -50,12 +49,13 @@ load_fama_french <- function(ffdir,as_df=TRUE){
   return(ff3)
 }
 
-#' Function to calculate and tabulate the mean return for every quantile 
-#' portfolio in a double-sorted portfolio formation procedure. The returns 
-#' to a long-short portfolio of the most extreme second layer quantiles within 
+#' Function to calculate and tabulate the mean return for every quantile
+#' portfolio in a double-sorted portfolio formation procedure. The returns
+#' to a long-short portfolio of the most extreme second layer quantiles within
 #' each first-layer quantile is also provided.
-cross_quantile_table <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
-                                 verbose=TRUE){
+cross_quantile_table <- function(Vars,groupings,K_m,diff=TRUE,
+                                 verbose=TRUE,remove_period=FALSE,date1=NULL,
+                                 date2=NULL,whole_months=TRUE){
   # Get groupings/ranks
   ranks <- multi_rank(Vars=Vars, groupings = groupings)
   # Get weight matrices for each group
@@ -94,38 +94,38 @@ cross_quantile_table <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
     rp <- xts(rowSums(rp),order.by = index(rp))
     rp_list[[w]] <- rp
   }
-  # Convert to monthly returns
-  if(to_monthly){
-    rp_list <- lapply(rp_list,function(x) quantmod::monthlyReturn(na.omit(x)))
+  if(remove_period){
+    for (i in 1:length(rp_list)){
+      rp_list[[i]] <- gfc_adjust(rp_list[[i]],weights=weight_list[[i]],
+                                 K_m=K_m,date1,date2,whole_months)
+    }
   }
-  rp_list <- do.call(cbind,rp_list)
-  names(rp_list) <- names(weight_list)
-  # Get portfolio statistics
-  mean_list <- colMeans(rp_list)
-  sd_list <- apply(rp_list,2,sd)/sqrt(nrow(rp_list))
-  t_list <- abs(mean_list)/sd_list
-  p_list <- (1-pt(t_list,df=nrow(rp_list)-1))*2
-  # Create table
-  print_list <- paste0(format(round(mean_list,4),scientific=FALSE),
-                       " ", "(", format(round(t_list,4),scientific = FALSE),")")
-  print_list[p_list<0.05] <- paste0(print_list[p_list<0.05],"*")
-  print_list[p_list<0.01] <- paste0(print_list[p_list<0.01],"*")
-  ret_mat <- matrix(print_list,ncol=groupings[1],byrow = FALSE)
-  colnames(ret_mat) <- paste0(names(Vars)[1],1:groupings[1])
-  rownames(ret_mat) <- c(paste0(names(Vars)[2],1:groupings[2]),
-                         paste0(names(Vars)[2],"1","-",names(Vars)[2],
-                                groupings[2]))
+  # Get mean monthly stats
+  tab <- sapply(rp_list, mean_return)
+  ps <- tab[3,]
+  tab[1:2,] <- format(round(tab[1:2,],4),scientific = FALSE)
+  tab[1,] <- paste0(tab[1,]," (",tab[2,],")")
+  tab[1,ps < 0.05] <- paste0(tab[1,ps < 0.05],"*")
+  tab[1,ps < 0.01] <- paste0(tab[1,ps < 0.01],"*")
+  tab[1,ps < 0.001] <- paste0(tab[1,ps < 0.001],"*")
+  tab <- matrix(tab[1,],nrow=groupings[1],byrow=TRUE)
+  colnames(tab) <- paste(1:ncol(tab))
+  colnames(tab)[1:groupings[2]] <- paste0(names(Vars)[2],1:groupings[2])
+  if(diff){
+    colnames(tab)[groupings[2]+1] <- paste0(colnames(tab)[1],"-",
+                                            colnames(tab)[groupings[2]])
+  }
+  rownames(tab) <- paste0(names(Vars)[1],1:nrow(tab))
   if(verbose){
-    names(mean_list) <- names(t_list) <- names(p_list) <- names(weight_list)
-    return(list(res_table=ret_mat,means=mean_list,stat=t_list,ps=p_list,
-                portfolios=rp_list))
+    names(rp_list) <- names(weight_list)
+    return(list(res_table=tab, portfolios=rp_list))
   }
-  return(ret_mat)
+  return(tab)
 }
 
-#' Function to calculate and tabulate the mean return for every quantile 
+#' Function to calculate and tabulate the mean *equity* return for every quantile
 #' portfolio in a single-sorted portfolio procedure.
-inter_quantile_table <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
+inter_quantile_table_eq <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
                                  verbose=FALSE){
   # Get groupings/ranks
   ranks <- multi_rank(Vars=Vars, groupings = groupings)
@@ -189,9 +189,74 @@ inter_quantile_table <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
   return(ret_mat)
 }
 
-#' Function to display the mean, t-statistic and p-vals for each column of a 
-#' time series as a table.
-mean_return_table <- function(comp_mat,sig=4){
+#' Function to calculate and tabulate the mean return for every quantile
+#' portfolio in a single-sorted portfolio procedure.
+inter_quantile_table <- function(Vars,groupings,K_m,to_monthly=TRUE,diff=TRUE,
+                                    verbose=FALSE,remove_period=FALSE,
+                                 date1=NULL,date2=NULL,whole_months=TRUE){
+  # Get groupings/ranks
+  ranks <- multi_rank(Vars=Vars, groupings = groupings)
+  # Get weight matrices for each group
+  weight_list <- list()
+  v1 <- ranks[[1]]
+  l=1
+  for (i in 1:groupings[1]){
+    lo <- v1[index(v1), ] == i
+    lo[index(lo),] <- as.numeric(lo)
+    lo <- na.fill(lo/rowSums(lo),0)
+    weight_list[[l]] <- lo
+    l <- l+1
+  }
+  if(diff){ # Get long-short weights
+    x <- weight_list[[1]]-weight_list[[groupings[1]]]
+    weight_list[[l]] <- x
+  }
+  # Perform simulations for each weight matrix
+  rp_list <- list()
+  for (w in 1:length(weight_list)){
+    weights=weight_list[[w]]
+    cores <- detectCores()
+    mycluster <- makeCluster(cores-1,type = "FORK")
+    registerDoParallel(mycluster)
+    out <- foreach(start_i = 1:K_m) %dopar% {
+      wts_i <- weights_i(weights, start_i, K_m, holding_time=FALSE )[[1]]
+      rp <- rp_cum_rets(wts_i,DF_rets,stop_loss = 0.9)
+      initEq*rp
+    }
+    stopCluster(mycluster)
+    names(out) <- paste0("portfolio",1:K_m)
+    rp <- do.call(cbind,out)
+    #rp <- xts(rowSums(rp),order.by = index(rp))
+    rp_list[[w]] <- rp
+  }
+  # Remove outlier periods (e.g, GFC) if applicable.
+  if(remove_period){
+    for (i in 1:length(rp_list)){
+      rp_list[[i]] <- gfc_adjust(rp_list[[i]],weights=weight_list[[i]],
+                                 K_m=K_m,date1,date2,whole_months)
+    }
+  }
+  # Get mean monthly stats
+  tab <- sapply(rp_list, mean_return)
+  tab[1:2,] <- format(round(tab[1:2,],4),scientific = FALSE)
+  tab[1,] <- paste0(tab[1,]," (",tab[2,],")")
+  tab[1,tab[3,] < 0.05] <- paste0(tab[1,tab[3,] < 0.05],"*")
+  tab[1,tab[3,] < 0.01] <- paste0(tab[1,tab[3,] < 0.01],"*")
+  tab[1,tab[3,] < 0.001] <- paste0(tab[1,tab[3,] < 0.001],"*")
+  colnames(tab) <- paste(1:ncol(tab))
+  colnames(tab)[1:groupings[1]] <- paste0(names(Vars)[1],1:groupings[1])
+  if(diff){colnames(tab)[groupings[1]+1] <- paste0(colnames(tab)[1],"-",
+                                                   colnames(tab)[groupings[1]])}
+  tab <- as.data.frame(tab)[1,]; rownames(tab) <- "mean (t-stat)"
+  if(verbose){
+    return(list(res_table=tab, portfolios=rp_list))
+  }
+  return(tab)
+}
+
+#' Function to display the mean, t-statistic and p-vals for each column of a
+#' equity time series as a table.
+mean_return_table_eq <- function(comp_mat,sig=4){
   nms <- names(comp_mat)
   mean_list <- colMeans(comp_mat)
   sd_list <- apply(comp_mat,2,sd)/sqrt(nrow(comp_mat))
@@ -210,6 +275,25 @@ mean_return_table <- function(comp_mat,sig=4){
   colnames(table1) <- nms
   rownames(table1) <- c("Mean","p (t-stat)")
   as.data.frame(table1)
+}
+
+#' Function to display the mean, t-statistic and p-vals for each column of a
+#' equity time series as a table.
+mean_return_table <- function(rps,sig=4){
+  nms <- names(rps)
+  if(is.null(nms)){nms <- paste0("P",1:length(rps))}
+  tab <- sapply(rps,mean_return)
+  ps <- tab[3,]
+  tab <- format(round(tab,4),scientific = FALSE)
+  tab[3,] <- paste0(tab[3,]," (",tab[2,],")")
+  tab[3,ps<0.05] <- paste0(tab[3,ps<0.05],"*")
+  tab[3,ps<0.01] <- paste0(tab[3,ps<0.01],"*")
+  tab[3,ps<0.001] <- paste0(tab[3,ps<0.001],"*")
+  tab <- tab[-2,]
+  tab <- matrix(tab,ncol=length(rps))
+  rownames(tab) <- c("mean","p (t-stat)")
+  colnames(tab) <- nms
+  return(as.data.frame(tab))
 }
 
 # Function to get the mean buy-and-hold (portfolio) response to an event,
@@ -288,7 +372,7 @@ event_response_bh <- function(weights,df_rets,horizon,on="months",stop_loss=NULL
 }
 
 #' Function to get the residual series for a given period-by-period regression
-#' equation and append to existing data set or flatten to time series for 
+#' equation and append to existing data set or flatten to time series for
 #' ranking.
 create_residual <- function(pmat,fmla,flatten=TRUE,
                             id="ticker",ind,assets=NULL){
@@ -360,8 +444,8 @@ vnames <- function(f){
   return(unique(f))
 }
 
-#' Function to append the sorting group of an asset for a given variable 
-#' (or combination of variables) to panel data. 
+#' Function to append the sorting group of an asset for a given variable
+#' (or combination of variables) to panel data.
 append_group <- function(pmat,Vars,groupings,Id="ticker"){
   # Elements of Vars should be ranks, not raw variables!
   if(is.null(names(Vars))){ names(Vars) <- paste0("V",1:length(Vars))}
@@ -375,3 +459,51 @@ append_group <- function(pmat,Vars,groupings,Id="ticker"){
   names(mr)[which(names(mr)=="group")] <- paste0(names(Vars),"_group")
   mr <- merge(pmat,mr,all.x = TRUE)
 }
+
+#' Function to get different types of mean return from portfolio return object.
+mean_return <- function(rpmat,overlapping=TRUE){
+  rp <- lapply(1:ncol(rpmat),
+               FUN=function(x) quantmod::monthlyReturn(na.omit(rpmat[,x])))
+  rp <- do.call(cbind,rp)
+  if (overlapping){
+    rp <- na.omit(rp)
+    ts_mean <- rowMeans(rp)
+    n <- length(ts_mean)
+    t_m <- mean(ts_mean)
+    s_d <- sd(ts_mean)/sqrt(n)
+
+  } else {
+    rp <- na.omit(as.numeric(rp))
+    t_m <- mean(rp)
+    n <- length(rp)
+    s_d <- sd(rp)/sqrt(n)
+  }
+  tstat <- t_m/s_d
+  pval <- (1-pt(tstat,df=n-1))*2
+  return(cbind(mean=t_m,tstat=tstat,pval=pval))
+}
+
+#' Function to remove no-invest periods in portfolio simulation results.
+#' @description Trading resumes at next entry date for a given K portfolio.
+#' In this ways, portfolios are still staggered after event period.
+gfc_adjust <- function(rmat,weights,K_m,date1,date2,whole_months=TRUE){
+  date1 <- as.Date(date1)
+  date2 <- as.Date(date2)
+  rmat <- simpleRets(rmat)
+  adj_list <- list()
+  for (i in 1:ncol(rmat)){
+    x <- na.omit(rmat[,i])
+    wi <- weights_i(weights,start_i=i,k=K_m)[[2]]
+    d2i <- index(wi)[which(index(wi)>=date2)[1]]
+    d1i <- GFC1
+    if(whole_months){d1i <- floor_date(d1i,"months")}
+    x[index(x) >= d1i & index(x) <= d2i] <- 0
+    x <- cumprod(1+x)
+    x[index(x) >= d1i & index(x) <= d2i] <- NA
+    adj_list[[i]] <- x
+  }
+  adj_list <- do.call(cbind,adj_list)
+  names(adj_list) <- names(rmat)
+  return(adj_list)
+}
+
