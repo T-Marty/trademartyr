@@ -101,9 +101,10 @@ cross_quantile_table <- function(Vars,groupings,K_m,diff=TRUE,
     }
   }
   # Get mean monthly stats
-  tab <- sapply(rp_list, mean_return)
+  tab <- sapply(rp_list,mean_return)
   ps <- tab[3,]
   tab[1:2,] <- format(round(tab[1:2,],4),scientific = FALSE)
+  tab <- apply(tab,2,FUN=function(x) sub(".*? (.+)", "\\1",x))
   tab[1,] <- paste0(tab[1,]," (",tab[2,],")")
   tab[1,ps < 0.05] <- paste0(tab[1,ps < 0.05],"*")
   tab[1,ps < 0.01] <- paste0(tab[1,ps < 0.01],"*")
@@ -237,17 +238,17 @@ inter_quantile_table <- function(Vars,groupings,K_m,to_monthly=TRUE,diff=TRUE,
     }
   }
   # Get mean monthly stats
-  tab <- sapply(rp_list, mean_return)
-  tab[1:2,] <- format(round(tab[1:2,],4),scientific = FALSE)
-  tab[1,] <- paste0(tab[1,]," (",tab[2,],")")
-  tab[1,tab[3,] < 0.05] <- paste0(tab[1,tab[3,] < 0.05],"*")
-  tab[1,tab[3,] < 0.01] <- paste0(tab[1,tab[3,] < 0.01],"*")
-  tab[1,tab[3,] < 0.001] <- paste0(tab[1,tab[3,] < 0.001],"*")
-  colnames(tab) <- paste(1:ncol(tab))
-  colnames(tab)[1:groupings[1]] <- paste0(names(Vars)[1],1:groupings[1])
-  if(diff){colnames(tab)[groupings[1]+1] <- paste0(colnames(tab)[1],"-",
-                                                   colnames(tab)[groupings[1]])}
-  tab <- as.data.frame(tab)[1,]; rownames(tab) <- "mean (t-stat)"
+  tab <- mean_return_table(rp_list)
+  tab <- data.frame(t(tab),stringsAsFactors = FALSE)
+  # remove p-val
+  tab[,2] <- sub(".*? (.+)", "\\1", tab[,2])
+  tab[,1] <- paste(tab[,1],tab[,2])
+  tab <- data.frame(tab[,1])
+  rownames(tab) <- paste(1:ncol(tab))
+  rownames(tab)[1:groupings[1]] <- paste0(names(Vars)[1],1:groupings[1])
+  if(diff){rownames(tab)[groupings[1]+1] <- paste0(rownames(tab)[1],"-",
+                                                   rownames(tab)[groupings[1]])}
+  colnames(tab) <- "mean (t-stat)"
   if(verbose){
     return(list(res_table=tab, portfolios=rp_list))
   }
@@ -279,12 +280,13 @@ mean_return_table_eq <- function(comp_mat,sig=4){
 
 #' Function to display the mean, t-statistic and p-vals for each column of a
 #' equity time series as a table.
-mean_return_table <- function(rps,sig=4){
+mean_return_table <- function(rps,verbose=FALSE,sig=4){
   nms <- names(rps)
   if(is.null(nms)){nms <- paste0("P",1:length(rps))}
   tab <- sapply(rps,mean_return)
   ps <- tab[3,]
   tab <- format(round(tab,4),scientific = FALSE)
+  tab <- apply(tab,2,stringr::str_trim)
   tab[3,] <- paste0(tab[3,]," (",tab[2,],")")
   tab[3,ps<0.05] <- paste0(tab[3,ps<0.05],"*")
   tab[3,ps<0.01] <- paste0(tab[3,ps<0.01],"*")
@@ -293,6 +295,11 @@ mean_return_table <- function(rps,sig=4){
   tab <- matrix(tab,ncol=length(rps))
   rownames(tab) <- c("mean","p (t-stat)")
   colnames(tab) <- nms
+  if(verbose){
+    num=t(sapply(rps,mean_return))
+    colnames(num) <- c("mean","t-stat","p-val")
+    return(list(res_mat=data.frame(tab),num=num))
+  }
   return(as.data.frame(tab))
 }
 
@@ -378,14 +385,17 @@ create_residual <- function(pmat,fmla,flatten=TRUE,
                             id="ticker",ind,assets=NULL){
   # Get relevant variable names for complete.cases
   var_names <- intersect(vnames(fmla),names(pmat))
-  v_name <- var_names[1]
+  # Make name for residual variable and make sure not taken
+  v_name <- paste0(var_names[1],"_res")
+  while(v_name %in% names(pmat)){
+    v_name <- paste0(v_name,"x")
+  }
   udates <- sort(unique(pmat$date))
   df_list <-list()
   for (i in 1:length(udates)){
-    subdf <- filter(pmat,date==udates[i])
+    subdf <- dplyr::filter(pmat,date==udates[i])
     fl <- lm(fmla,subdf)
-    subdf[complete.cases(subdf[,var_names]),
-          paste0(v_name,"_res")] <- fl$residuals
+    subdf[complete.cases(subdf[,var_names]),v_name] <- fl$residuals
     df_list[[i]] <- subdf
   }
   df <- do.call(rbind,df_list)
@@ -398,8 +408,7 @@ create_residual <- function(pmat,fmla,flatten=TRUE,
     # Subset for spreading
     Index=c(names(df)[tcol],id)
     # Spread the residual data into format used for ranking and position prep
-    d_res <- tidyr::spread(df[,c(Index,paste0(v_name,"_res"))],
-                           id,paste0(v_name,"_res"))
+    d_res <- tidyr::spread(df[,c(Index,v_name)],id,v_name)
     # Assets with less than J_m periods of data will not be in the panel data.frame
     if(!is.null(assets)){
       no_data <- assets[!(assets %in% names(d_res))]
@@ -479,7 +488,7 @@ mean_return <- function(rpmat,overlapping=TRUE){
     s_d <- sd(rp)/sqrt(n)
   }
   tstat <- t_m/s_d
-  pval <- (1-pt(tstat,df=n-1))*2
+  pval <- (1-pt(abs(tstat),df=n-1))*2
   return(cbind(mean=t_m,tstat=tstat,pval=pval))
 }
 
