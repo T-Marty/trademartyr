@@ -739,7 +739,7 @@ forward_return <- function(df,on="months",n=6,ind=NULL,backward=FALSE){
   # Calculate n-period return
   df <- ROC(df,n=n,type="discrete")
   if(backward) {names(df) <- nms; return(df)}
-  
+
   df[1:(nrow(df)-n),] <- as.matrix(df[(n+1):nrow(df),])
   df[(nrow(df)-n+1):nrow(df),] <- NA
 
@@ -782,7 +782,7 @@ median_adjust <- function(ns,hist_members=newHM,func=median){
   ns <- zoo::na.fill(ns,0)*hist_members
   return(ns)
 }
-  
+
 fillFwd <- function(df,colname){
   pts <- which(!is.na(df[,colname]))
   if (length(pts) > 1){
@@ -799,7 +799,7 @@ fillFwd <- function(df,colname){
   return(df)
 }
 
-#' New much, much faster function to calculated cumulative long-short portfolio 
+#' New much, much faster function to calculated cumulative long-short portfolio
 #' returns.
 rp_cum_rets <-  function(wts,df_rets,stop_loss=NULL){
   bop=1
@@ -851,5 +851,5 @@ rp_cum_rets <-  function(wts,df_rets,stop_loss=NULL){
       return(eq)
     }
   }
-  return(eq)
+  return(na.locf(eq))
 }
