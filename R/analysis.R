@@ -2,14 +2,15 @@
 #' to performing robust regression between portfolio legs.
 panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
   if(is.null(names(rpmat))){names(rpmat) <- paste(1:ncol(rpmat))}
-  inames <- names(ind_mat)
-
-  if(sum(class(ind_mat)=="data.frame")==0){
-    tm <- index(ind_mat)
-    ind_mat <- as.data.frame(ind_mat)
-    ind_mat$date <- tm
-    if(to_monthly){
-      ind_mat$date <- zoo::as.yearmon(ind_mat$date)
+  if(!is.null(ind_mat)){
+    inames <- names(ind_mat)
+    if(sum(class(ind_mat)=="data.frame")==0){
+      tm <- index(ind_mat)
+      ind_mat <- as.data.frame(ind_mat)
+      ind_mat$date <- tm
+      if(to_monthly){
+        ind_mat$date <- zoo::as.yearmon(ind_mat$date)
+      }
     }
   }
   rp_list <- list()
@@ -24,7 +25,9 @@ panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
     x <- as.data.frame(x,row.names = FALSE)
     x$date <- tm
     x$portfolio <- names(rpmat)[i]
-    x <- merge(x,ind_mat,by="date")
+    if(!is.null(ind_mat)){
+      x <- merge(x,ind_mat,by="date")
+    }
     rp_list[[i]] <- x[,c("date",names(x)[names(x)!="date"])]
   }
   rp_list <- do.call(rbind,rp_list)
@@ -244,7 +247,7 @@ inter_quantile_table <- function(Vars,groupings,K_m,to_monthly=TRUE,diff=TRUE,
   tab[,2] <- sub(".*? (.+)", "\\1", tab[,2])
   tab[,1] <- paste(tab[,1],tab[,2])
   tab <- data.frame(tab[,1])
-  rownames(tab) <- paste(1:ncol(tab))
+  rownames(tab) <- paste(1:nrow(tab))
   rownames(tab)[1:groupings[1]] <- paste0(names(Vars)[1],1:groupings[1])
   if(diff){rownames(tab)[groupings[1]+1] <- paste0(rownames(tab)[1],"-",
                                                    rownames(tab)[groupings[1]])}
@@ -516,3 +519,82 @@ gfc_adjust <- function(rmat,weights,K_m,date1,date2,whole_months=TRUE){
   return(adj_list)
 }
 
+#' Function to remove weights on assets with discordent information.
+#' Specifcally, only long (short) holdings with positive (negative) variables
+#' (e.g. sentiment, momentum) are kept.
+remove_discordant <- function(weights,Raw){
+  # Raw is list of raw variable values (not ranks)
+  long <- short <- xts(matrix(0,nrow=nrow(weights),ncol=ncol(weights)),
+                       order.by=index(weights))
+  long <- (weights>0)+long
+  short <- (weights<0)+short
+  for (i in 1:length(Raw)){
+    if(!is.null(Raw[[i]])){
+      long <- (Raw[[i]] > 0)*long
+      short <- (Raw[[i]] < 0)*short
+    }
+  }
+  long <- long/rowSums(long,na.rm = TRUE)
+  short <- short/rowSums(short,na.rm = TRUE)
+  long <- na.fill(long,0)
+  short <- na.fill(short,0)
+  wts <- long-short
+  names(wts) <- names(weights)
+  return(wts)
+}
+
+#' Function to perform simultaneous multiple sorting. Differs from multi_rank
+#' in that sorting is not conducted consecutively. Rather, the ranks of an
+#' asset with respect to each variable are multiplied together.
+#' Removes assets with discordant information if Raw !=null.
+multi_rank_no_order <- function(Vars,Raw,long_only=FALSE){
+  # Note: Zero used to identify non-investable assets
+  r <- Vars[[1]]
+  for (i in 2:length(Vars)){
+    r <- r*Vars[[i]]
+  }
+  long=r
+  short=r
+  for (i in 1:length(Raw)){
+    if(!is.null(Raw[[i]])){
+      long <- (Raw[[i]] > 0)*long
+      short <- (Raw[[i]] < 0)*short
+    }
+  }
+  long <- na.fill(long,0)
+  short <- na.fill(short,0)
+  for (i in 1:nrow(r)){
+    ranks_l <- rank(as.numeric(long[i,long[i,]!=0]),ties.method="first")
+    long[i,long[i,]!=0] <- ranks_l
+    ranks_s <- rank(-as.numeric(short[i,short[i,]!=0]),ties.method="first")
+    short[i,short[i,]!=0] <- ranks_s
+  }
+  long[index(long),] <- as.matrix((long <= TopN)&(long>0))
+  long <- na.fill(long/rowSums(long),0)
+  short[index(short),] <- as.matrix((short <= TopN)&(short>0))
+  short <- na.fill(short/rowSums(short),0)
+  if(long_only){
+    names(long) <- names(Vars[[1]])
+    return(long)}
+  wts <- (long-short)
+  names(wts) <- names(Vars[[1]])
+  return(wts)
+}
+
+#' Function to parallelize return-based simulation over each leg.
+return_sim <- function(weights,K_m=6,DF_rets,
+                       stop_loss=0.9,holding_time=FALSE, initEq=1){
+  cores <- detectCores()
+  mycluster <- makeCluster(cores-1,type = "FORK")
+  registerDoParallel(mycluster)
+  out <- foreach(start_i = 1:K_m) %dopar% {
+    wts_i <- weights_i(weights, start_i, K_m, holding_time)[[1]]
+    rp <- rp_cum_rets(wts=wts_i,DF_rets,stop_loss)
+    initEq*rp
+  }
+  stopCluster(mycluster)
+  names(out) <- paste0("portfolio",1:K_m)
+  rmat <- do.call(cbind, out) ;rm(out)
+  rp <- xts(rowSums(na.trim(rmat)),order.by = index(na.trim(rmat)))
+  return(list(rmat=rmat,rp=rp))
+}
