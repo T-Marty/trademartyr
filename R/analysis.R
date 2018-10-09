@@ -310,7 +310,7 @@ mean_return_table <- function(rps,verbose=FALSE,sig=4){
 # as opposed to the continuously equal-weighted response of portfolio firms.
 event_response_bh <- function(weights,df_rets,horizon,on="months",stop_loss=NULL){
   cols <- max(diff(endpoints(df_rets,on=on,k=1)))*horizon
-  col_min <- min(diff(endpoints(df_rets,on=on,k=6)))
+  col_min <- min(diff(endpoints(df_rets,on=on,k=horizon)))
   long_mat <- xts(matrix(ncol=cols,nrow=nrow(weights)),order.by=index(weights))
   short_mat <- long_mat
   ls_mat <- long_mat
@@ -373,7 +373,7 @@ event_response_bh <- function(weights,df_rets,horizon,on="months",stop_loss=NULL
   l <- c(0,colMeans(long_mat,na.rm = TRUE))
   s <- c(0,colMeans(short_mat,na.rm = TRUE))
   ls_ <- c(0,colMeans(ls_mat,na.rm = TRUE))
-  x <- as.data.frame(na.omit(cbind(l,s,ls_)))
+  x <- as.data.frame(cbind(l,s,ls_))
   names(x) <- c("long","short","long_short")
   x$days <- 1:nrow(x)
   x <- x[1:col_min,]
@@ -597,4 +597,35 @@ return_sim <- function(weights,K_m=6,DF_rets,
   rmat <- do.call(cbind, out) ;rm(out)
   rp <- xts(rowSums(na.trim(rmat)),order.by = index(na.trim(rmat)))
   return(list(rmat=rmat,rp=rp))
+}
+
+#' Function that takes a primary ranking and compromises the primary
+#' rank to ensure concordant variable direction of specified variables.
+remove_discordant_bruce <- function(primary_ranks,Raw,TopN){
+  # Function to use rankings of first variable,
+  # but apply variables in Raw as a filter based on sign.
+  # i.e. long (short) side only contains assets with positive (negative)
+  # Raw values
+  long <- short <- primary_ranks
+  for (i in 1:length(Raw)){
+    if(!is.null(Raw[[i]])){
+      long <- (Raw[[i]] > 0)*long
+      short <- (Raw[[i]] < 0)*short
+    }
+  }
+  long <- na.fill(long,0)
+  short <- na.fill(short,0)
+  for (i in 1:nrow(long)){
+    ranks_l <- rank(as.numeric(long[i,long[i,]!=0]),ties.method="first")
+    long[i,long[i,]!=0] <- ranks_l
+    ranks_s <- rank(-as.numeric(short[i,short[i,]!=0]),ties.method="first")
+    short[i,short[i,]!=0] <- ranks_s
+  }
+  short <- ((short <= TopN) & (short > 0))
+  long <- ((long <= TopN) & (long > 0))
+  short <- na.fill(short/rowSums(short,na.rm = TRUE),0)
+  long <- na.fill(long/rowSums(long,na.rm = TRUE),0)
+  wts <- long-short
+  names(wts) <- names(primary_ranks)
+  return(wts)
 }
