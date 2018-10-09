@@ -853,3 +853,46 @@ rp_cum_rets <-  function(wts,df_rets,stop_loss=NULL){
   }
   return(na.locf(eq))
 }
+
+#' Function for adjusting prices or dividends for splits.
+#' splits should be recorded as dilution factor, e.g. a 2:1 split, where
+#' the number of shares doubles, would be 0.5.
+#' This is the form returned by quantmod::getSplits().
+ca_adjust <- function(x, splits){
+  d <- cbind(x,splits)
+  for (j in which(!is.na(d[,2]))){
+    d[min((j-1),1):(j-1),1] <- d[min((j-1),1):(j-1),1]*as.numeric(d[j,2])
+  }
+  adj_divs <- na.omit(d[,1])
+  return(adj_divs)
+}
+
+#' Function for adjusting prices for dividends
+div_adjust <- function(x, divs){
+  # remove duplicate dividends (if you want summed, should be added elsewhere)
+  is_duplicated <- duplicated(cbind(index(divs),as.numeric(divs)))
+  divs <- divs[!is_duplicated,]
+  d <- cbind(x,divs)
+  for (j in which(!is.na(d[,2]))){
+    rj <- as.numeric(d[j,1]/(d[j,1]+d[j,2]))
+    d[min((j-1),1):(j-1),1] <- d[min((j-1),1):(j-1),1]*rj
+  }
+  adj_divs <- na.omit(d[,1])
+  return(adj_divs)
+}
+
+#' Function for adjusting prices for splits and dividends
+adjust_prices <- function(x, divs=NULL, splits=NULL){
+  if(!is.null(splits)){
+    if(!is.null(divs)){
+      td_a <- ca_adjust(divs, splits = splits)
+      tp_a <- ca_adjust(x, splits = splits)
+      tp_a <- div_adjust(tp_a, divs = td_a)
+    } else {
+      tp_a <- ca_adjust(x, splits = splits)
+    }
+  } else {
+    tp_a <- div_adjust(x, divs=divs)
+  }
+  return(tp_a)
+}
