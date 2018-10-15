@@ -133,12 +133,37 @@ naFillFrom <- function(df, firstDay=FALSE, fromNext=FALSE, ndays=2, ind=NULL,
 
 #' Function to generate index of all NYSE trading dates.
 nyse_trading_dates <- function(start_date, end_date, freq="days", tz="UTC"){
+  start_y <- lubridate::year(start_date)
+  end_y <- lubridate::year(end_date)
   master_ind <- seq(as.Date(start_date), as.Date(end_date), by=freq)
   master_ind <- master_ind[
     !((weekdays(master_ind) == "Saturday") |
         (weekdays(master_ind) == "Sunday"))]
   master_ind <- master_ind[!(master_ind %in% as.Date(
-    timeDate::holidayNYSE(2003:2018)))]
+    timeDate::holidayNYSE(start_y:end_y)))]
+  if (is.null(tz)) {tz=Sys.getenv("TZ")}
+  master_ind <- as.POSIXct(master_ind, tz=tz)
+  return(master_ind)
+}
+
+#' Function to generate index of all trading dates at a location supported
+#' by the timeDate package.
+trading_dates <- function(start_date, end_date, freq="days", tz="UTC",
+                          loc="NYSE"){
+  loc <- tolower(loc)[1]
+  if(length(intersect(loc,c("nyse","london","tsx","zurich","nerc"))) < 1){
+    stop('loc must be one of: "NYSE","London","TSX","Zurich","NERC"')
+  }
+  f <- function(x){
+    eval(parse(text=paste0("timeDate::holiday",toupper(loc),"()")))
+  }
+  start_y <- lubridate::year(start_date)
+  end_y <- lubridate::year(end_date)
+  master_ind <- seq(as.Date(start_date), as.Date(end_date), by=freq)
+  master_ind <- master_ind[
+    !((weekdays(master_ind) == "Saturday") |
+        (weekdays(master_ind) == "Sunday"))]
+  master_ind <- master_ind[!(master_ind %in% as.Date(f(start_y:end_y)))]
   if (is.null(tz)) {tz=Sys.getenv("TZ")}
   master_ind <- as.POSIXct(master_ind, tz=tz)
   return(master_ind)
@@ -859,11 +884,14 @@ rp_cum_rets <-  function(wts,df_rets,stop_loss=NULL){
 #' the number of shares doubles, would be 0.5.
 #' This is the form returned by quantmod::getSplits().
 ca_adjust <- function(x, splits){
-  d <- cbind(x,splits)
+  ind <- index(x)
+  x <- na.omit(x)
+  d <- cbind(x,splits)[paste0(range(index(x)),collapse = "::")]
   for (j in which(!is.na(d[,2]))){
     d[min((j-1),1):(j-1),1] <- d[min((j-1),1):(j-1),1]*as.numeric(d[j,2])
   }
-  adj_divs <- na.omit(d[,1])
+  # return with original index and missing values
+  adj_divs <- cbind(d[index(x),1],ind)
   return(adj_divs)
 }
 
@@ -872,12 +900,17 @@ div_adjust <- function(x, divs){
   # remove duplicate dividends (if you want summed, should be added elsewhere)
   is_duplicated <- duplicated(cbind(index(divs),as.numeric(divs)))
   divs <- divs[!is_duplicated,]
-  d <- cbind(x,divs)
+  ind <- index(x)
+  x <- na.omit(x)
+  d <- cbind(x,divs)[paste0(range(index(x)),collapse = "::")]
+  # If close not available on ex date, use next close for adj ratio.
+  d[,1] <- zoo::na.locf(d[,1], fromLast = TRUE)
   for (j in which(!is.na(d[,2]))){
     rj <- as.numeric(d[j,1]/(d[j,1]+d[j,2]))
     d[min((j-1),1):(j-1),1] <- d[min((j-1),1):(j-1),1]*rj
   }
-  adj_divs <- na.omit(d[,1])
+  # return with original index and missing values
+  adj_divs <- cbind(d[index(x),1],ind)
   return(adj_divs)
 }
 
@@ -895,4 +928,25 @@ adjust_prices <- function(x, divs=NULL, splits=NULL){
     tp_a <- div_adjust(x, divs=divs)
   }
   return(tp_a)
+}
+
+#' Function for converting xts to data.frames with time index
+#' for the purpose of saving to file.
+xts_to_df <- function(x, datecol="date"){
+  tm <- index(x)
+  x <- data.frame(x)
+  nm <- names(x)
+  x$date <- tm
+  x <- x[,c("date",nm)]
+  row.names(x) <- NULL
+  return(x)
+}
+
+# Function to load and combine raw trna news and score files
+load_raw_news_files <- function(Dir,n_file,s_file,scorenames, newsnames){
+  df <- read_tsv(file.path(Dir,s_file))
+  df <- df[,scorenames]
+  dn <- read_tsv(file.path(Dir,n_file))
+  dn <- dn[,newsnames]
+  return(inner_join(df,dn,by='id'))
 }
