@@ -588,61 +588,85 @@ allocate_news <- function(d_n, nyse=TRUE, eod_h=16, eod_tz="EST", ind=NULL){
   return(d_n)
 }
 
-#' Function to calculate daily news scores from xts of news data
+#' Function to calculate daily news scores from xts of news data.
+#' Applied to output of `allocate_news`.
+#' "by_story" aggregates to story level first
 daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
   news_type <- tolower(news_type)
-  if(!(news_type %in% c("all", "combined", "stories", "alerts"))){
-    warning(paste('news_type must be one of "all", "combined", "stories",',
-                  'or "alerts". Assuming "all".'))
+  if(!(news_type %in% c("all", "combined", "takes", "alerts","by_story"))){
+    warning(paste('news_type must be one of "all", "combined", "takes",',
+                  '"by_story", or "alerts". Assuming "all".'))
     news_type <- "all"
   }
   if(is.null(ind)){ind <- unique(index(dn))}
   tm <- index(dn)
   dn <- as.data.frame(dn, stringsAsFactors=FALSE)
+  dn <- utils::type.convert(dn)
   dn$date <- tm
   row.names(dn)<- NULL
   dn <- subset(dn, relevance >= min_relevance)
+  
+  if(news_type =="by_story"){
+    dn <- dplyr::group_by(dn, date, altId)
+    smt <- dplyr::summarise(dn,
+                            t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance),story_relevance=mean(relevance),
+                            n_alerts=sum(urgency==1),n_takes=sum(urgency==3))
+    # Aggregate by day
+    smt <- dplyr::group_by(smt, date)
+    smt <- dplyr::summarise(smt,t_sent=
+                              sum(story_relevance*t_sent)/sum(story_relevance),
+                            alerts=sum(n_alerts),takes=sum(n_takes),
+                            stories=n())
+    
+    smt <- xts(smt[,setdiff(names(smt),"date")],order.by = as.Date(smt$date))
+    smt <- cbind(smt,ind)
+    smt$stories[is.na(smt$stories)] <- 0
+    smt$alerts[is.na(smt$alerts)] <- 0
+    smt$takes[is.na(smt$takes)] <- 0
+    return(smt)
+  }
   dn <- dplyr::group_by(dn, date)
   if(news_type =="all"){
-    sms <- dplyr::summarise(subset(dn, urgency==3), stories=n(),
-                     s_sent=sum(relevance*(sentimentPositive-sentimentNegative))
-                     /sum(relevance))
+    sms <- dplyr::summarise(subset(dn, urgency==3), takes=n(),
+                            s_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance))
     sma <- dplyr::summarise(subset(dn, urgency==1), alerts=n(),
-                     a_sent=sum(relevance*(sentimentPositive-sentimentNegative))
-                     /sum(relevance))
+                            a_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance))
     smt <- dplyr::summarise(dn,
-                     t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
-                     /sum(relevance))
+                            t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance))
     sms <- xts(sms[,setdiff(names(sms),"date")],order.by = as.Date(sms$date))
     sma <- xts(sma[,setdiff(names(sma),"date")],order.by = as.Date(sma$date))
     smt <- xts(smt[,setdiff(names(smt),"date")],order.by = as.Date(smt$date))
     dc <- cbind(cbind(smt,sms,sma),ind)
-    dc$stories[is.na(dc$stories)] <- 0
+    dc$takes[is.na(dc$takes)] <- 0
     dc$alerts[is.na(dc$alerts)] <- 0
     return(dc)
   }
   if(news_type =="combined"){
     smt <- dplyr::summarise(dn,
-                     t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
-                     /sum(relevance),n=n())
+                            t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance),items=n())
     smt <- xts(smt[,setdiff(names(smt),"date")],order.by = as.Date(smt$date))
     smt <- cbind(smt,ind)
-    smt$n[is.na(smt$n)] <- 0
+    smt$items[is.na(smt$n)] <- 0
     return(smt)
   }
-  if(news_type =="stories"){
-    sms <- dplyr::summarise(subset(dn, urgency==3), stories=n(),
-                     s_sent=sum(relevance*(sentimentPositive-sentimentNegative))
-                     /sum(relevance))
+  if(news_type =="takes"){
+    sms <- dplyr::summarise(subset(dn, urgency==3), takes=n(),
+                            s_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance))
     sms <- xts(sms[,setdiff(names(sms),"date")],order.by = as.Date(sms$date))
     sms <- cbind(sms,ind)
-    sms$stories[is.na(sms$stories)] <- 0
+    sms$takes[is.na(sms$takes)] <- 0
     return(sms)
   }
   if(news_type =="alerts"){
     sma <- dplyr::summarise(subset(dn, urgency==1), alerts=n(),
-                     a_sent=sum(relevance*(sentimentPositive-sentimentNegative))
-                     /sum(relevance))
+                            a_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance))
     sma <- xts(sma[,setdiff(names(sma),"date")],order.by = as.Date(sma$date))
     sma <- cbind(sma,ind)
     sma$alerts[is.na(sma$alerts)] <- 0
@@ -696,7 +720,7 @@ aggregate_news <- function(dn, n=1, w=1, on="months", ind=NULL, from_first=TRUE)
 load_news_file <- function(fDir, Fname, col_names = NULL){
   if(is.null(col_names)){
     col_names <- c("feedTimestamp","relevance","urgency","sentimentClass",
-                   "sentimentPositive","sentimentNegative")
+                   "sentimentPositive","sentimentNegative","altId")
   }
   x <- read_csv(file.path(trnaDir,paste0(assets[i],".csv")))
   x <- x[,col_names]
