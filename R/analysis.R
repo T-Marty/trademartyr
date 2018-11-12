@@ -19,10 +19,13 @@ panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
     if(to_monthly){
       x <- quantmod::monthlyReturn(x)
       index(x) <- as.yearmon(index(x))
+    } else{
+      x <- PerformanceAnalytics::Return.calculate(x,method = "discrete")
     }
     names(x) <- "rp"
     tm <- index(x)
     x <- as.data.frame(x,row.names = FALSE)
+    if(grepl("POSIX",class(tm)[1])){tm <- as.Date(tm)}
     x$date <- tm
     x$portfolio <- names(rpmat)[i]
     if(!is.null(ind_mat)){
@@ -35,8 +38,16 @@ panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
 }
 
 #' Function to load Fama French 3 factor data
-load_fama_french <- function(ffdir,as_df=TRUE){
-  ff3 <- readr::read_csv(ffdir,skip = 3,n_max = 1104)
+load_fama_french <- function(ffdir,as_df=TRUE,freq="monthly"){
+  if(freq=="daily"){
+    ff3 <- readr::read_csv(ffdir,skip = 3)
+    names(ff3)[1] <- "date"
+    names(ff3)[grep("Mkt-",names(ff3),ignore.case = TRUE)] <- "Mkt_RF"
+    ff3$date <- ymd(ff3$date)
+    ff3 <- xts(ff3[,names(ff3)!="date"],order.by = ff3$date)
+    return(ff3/100)
+  }
+  ff3 <- readr::read_csv(ffdir,skip = 3,n_max = 663)
   names(ff3)[1] <- "date"
   names(ff3)[grep("Mkt-",names(ff3),ignore.case = TRUE)] <- "Mkt_RF"
   # append day to %Y%m format to allow conversion
@@ -291,9 +302,9 @@ mean_return_table <- function(rps,verbose=FALSE,sig=4){
   tab <- format(round(tab,4),scientific = FALSE)
   tab <- apply(tab,2,stringr::str_trim)
   tab[3,] <- paste0(tab[3,]," (",tab[2,],")")
-  tab[3,ps<0.05] <- paste0(tab[3,ps<0.05],"*")
-  tab[3,ps<0.01] <- paste0(tab[3,ps<0.01],"*")
-  tab[3,ps<0.001] <- paste0(tab[3,ps<0.001],"*")
+  tab[1,ps<0.05] <- paste0(tab[1,ps<0.05],"*")
+  tab[1,ps<0.01] <- paste0(tab[1,ps<0.01],"*")
+  tab[1,ps<0.001] <- paste0(tab[1,ps<0.001],"*")
   tab <- tab[-2,]
   tab <- matrix(tab,ncol=length(rps))
   rownames(tab) <- c("mean","p (t-stat)")
@@ -629,3 +640,62 @@ remove_discordant_bruce <- function(primary_ranks,Raw,TopN){
   names(wts) <- names(primary_ranks)
   return(wts)
 }
+
+#' Function to run factor regressions and neatly present results.
+#' Allows for panel-style or mean overlapping return analysis.
+alpha_table <- function(panel_list,factor_mat,model="CAPM",method="SCC",
+                        vcov_=sandwich::NeweyWest,to_monthly=TRUE){
+
+  if(model=="CAPM"){
+    fmla=I(rp-RF)~Mkt_RF
+  } else if(model=="FF3"){
+    fmla = I(rp-RF)~Mkt_RF+HML+SMB
+  } else if(model=="FF5"){
+    fmla = fmla = I(rp-RF)~Mkt_RF+HML+SMB+RMW+CMA
+  }
+  if(method=="SCC"){
+    # Method 1 - SCC Panel
+    alpha1 <- numeric(length(panel_list))
+    p1 <- numeric(length(panel_list))
+    for (i in 1:length(panel_list)){
+      rpmat <- panel_list[[i]]
+      rp_panel <- panelise_rp(na.omit(rpmat),ind_mat = factor_mat,
+                              to_monthly=to_monthly)
+      reg_model <- plm(fmla,data=rp_panel,index=c("date","portfolio"),
+                       model="pooling")
+      coefs <- as.matrix(coeftest(reg_model, vcov. = vcovSCC))
+      alpha1[i] <- round(coefs[1,1],4)
+      p1[i] <- round(coefs[1,4],4)
+    }
+  } else if(method=="Fama"){
+    alpha1 <- numeric(length(panel_list))
+    p1 <- numeric(length(panel_list))
+    for (i in 1:length(panel_list)){
+      rpmat <- na.omit(panel_list[[i]])
+      if(to_monthly){
+        out <- apply(rpmat,2,FUN=function(x)
+        {as.numeric(quantmod::monthlyReturn(na.omit(x)))})
+        rpmat <- xts::xts(out,index(xts::to.monthly(rpmat)))
+      } else{
+        rpmat <- PerformanceAnalytics::Return.calculate(rpmat,"discrete")
+      }
+      tm <- index(rpmat)
+      rpmat <- data.frame(cbind(date=1,rp=rowMeans(rpmat,na.rm = TRUE)))
+      rpmat$date <- tm
+      rpmat <- merge(rpmat,ff3)
+      reg_model <- lm(fmla,data=rpmat)
+      coefs <- as.matrix(coeftest(capm_model, vcov. = vcovSCC))
+      alpha1[i] <- round(coefs[1,1],4)
+      p1[i] <- round(coefs[1,4],4)
+    }
+  }
+  alpha1 <- format(alpha1,scientific = FALSE)
+  alpha1[p1<0.05] <- paste0(alpha1[p1<0.05],"*")
+  alpha1[p1<0.01] <- paste0(alpha1[p1<0.01],"*")
+  alpha1[p1<0.001] <- paste0(alpha1[p1<0.001],"*")
+  p1 <- format(p1,scientific = FALSE)
+  capm_table1 <- data.frame(rbind(intercept=alpha1,paste0("(",p1,")")))
+  names(capm_table1) <- names(panel_list)
+  return(capm_table1)
+}
+
