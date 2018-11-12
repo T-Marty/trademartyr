@@ -97,7 +97,7 @@ clean_names <- function(symbolList, totalReturn=FALSE,Member=FALSE,ind=NULL,
 #' @param ndays The maximum number of days from NA from which to find data.
 #' @note NEED TO REMOVE Automatic NYSE trading days.
 #'@export
-naFillFrom <- function(df, firstDay=FALSE, fromNext=FALSE, ndays=2, ind=NULL,
+naFillFrom <- function(df, firstDay=FALSE, fromNext=FALSE, ndays=5, ind=NULL,
                        on="months"){
   k=1
   if (fromNext){k=-1}
@@ -176,15 +176,16 @@ trading_dates <- function(start_date, end_date, freq="days", tz="UTC",
 #' @param hist_members xts object containing membership data. Column names are
 #' assumed to be asset names corresponding to those in df. Note: All entries
 #' not NA are assumed to represent active membership.
-clean_hist_members <- function(hist_members){
-  hist_members <- readRDS(file.path(compDir,'HM_new.RDS'))
-  names(hist_members)[which(names(hist_members)=='CBRE US')] <- "CBG US"
-  names(hist_members)[which(names(hist_members)=='WELL US')] <- "HCN US"
-  names(hist_members)[which(names(hist_members)=='BKNG US')] <- "PCLN US"
-  sp500 <- gsub("/","_",names(hist_members))
-  sp500 <- gsub(" US","",sp500)
-  names(hist_members) <- sp500
-  hist_members <- hist_members[,-(which(sp500=="1437355D"))] # Empty data
+clean_hist_members <- function(hist_members,hist_index="SP500"){
+  member_names <- gsub("/","_",names(hist_members))
+  member_names <- gsub("\ .*","",member_names)
+  names(hist_members) <- member_names
+  if(hist_index=="SP500"){
+    names(hist_members)[which(names(hist_members)=='CBRE')] <- "CBG"
+    names(hist_members)[which(names(hist_members)=='WELL')] <- "HCN"
+    names(hist_members)[which(names(hist_members)=='BKNG')] <- "PCLN"
+    hist_members <- hist_members[,-(which(member_names=="1437355D"))] # Empty data
+  }
   return(hist_members)
 }
 
@@ -605,7 +606,7 @@ daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
   dn$date <- tm
   row.names(dn)<- NULL
   dn <- subset(dn, relevance >= min_relevance)
-  
+
   if(news_type =="by_story"){
     dn <- dplyr::group_by(dn, date, altId)
     smt <- dplyr::summarise(dn,
@@ -618,7 +619,7 @@ daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
                               sum(story_relevance*t_sent)/sum(story_relevance),
                             alerts=sum(n_alerts),takes=sum(n_takes),
                             stories=n())
-    
+
     smt <- xts(smt[,setdiff(names(smt),"date")],order.by = as.Date(smt$date))
     smt <- cbind(smt,ind)
     smt$stories[is.na(smt$stories)] <- 0
@@ -717,12 +718,12 @@ aggregate_news <- function(dn, n=1, w=1, on="months", ind=NULL, from_first=TRUE)
 
 #' Temporary function to load and return news data and convert to xts
 #' (does not put in environment)
-load_news_file <- function(fDir, Fname, col_names = NULL){
+load_news_file <- function(f_dir, f_name, col_names = NULL){
   if(is.null(col_names)){
     col_names <- c("feedTimestamp","relevance","urgency","sentimentClass",
                    "sentimentPositive","sentimentNegative","altId")
   }
-  x <- read_csv(file.path(trnaDir,paste0(assets[i],".csv")))
+  x <- read_csv(file.path(f_dir,paste0(f_name,".csv")))
   x <- x[,col_names]
   x <- as.xts(x[,-which(names(x)=="feedTimestamp")],
               order.by = x$feedTimestamp)
@@ -823,12 +824,16 @@ median_adjust_deprecated <- function(ns,hist_members=newHM){
 #' to represent non-membership (as output by Bloomberg wrappers)
 #' Note also that news data for all non-members will be zero.
 median_adjust <- function(ns,hist_members=newHM,func=median){
+  # need to recall which rows have no data
+  no_data <- apply(ns,1,function(x) sum(is.na(x))) == ncol(ns)
   hist_members <- hist_members[index(ns),names(ns)]
   ns <- ns*hist_members # This makes non-member news data NA
   ns <- ns-apply(ns,1,func,na.rm=TRUE)
   # Fill all NAs with zeros, but make non-members NA again, since they were not
   # median-adjusted and their zero-values will be meaningless.
   ns <- zoo::na.fill(ns,0)*hist_members
+  # also make rows with no data NA again
+  ns[no_data,] <- NA
   return(ns)
 }
 
@@ -966,7 +971,7 @@ xts_to_df <- function(x, datecol="date"){
   return(x)
 }
 
-# Function to load and combine raw trna news and score files
+#' Function to load and combine raw trna news and score files
 load_raw_news_files <- function(Dir,n_file,s_file,scorenames, newsnames){
   df <- read_tsv(file.path(Dir,s_file))
   df <- df[,scorenames]
@@ -974,3 +979,36 @@ load_raw_news_files <- function(Dir,n_file,s_file,scorenames, newsnames){
   dn <- dn[,newsnames]
   return(inner_join(df,dn,by='id'))
 }
+
+#' Gets columns of all symbols (e.g. close price) by loading each
+#' file and discarding it, rather than needed all files loading in
+#' Global environmnet.
+get_cols_large <- function(assets,f_dir,cname,daterange=NULL){
+  p_list <- list.files(f_dir)
+  no_data <- assets[!(paste0(assets,".csv") %in% p_list)]
+  col_names = c()
+  if(length(no_data) >= 1){
+    print(paste("No Data Found For ",no_data))
+  }
+  M <- list()
+  for ( i in 1:length(assets)){
+    sym <- assets[i]
+    if(sym %in% no_data){next()}
+    x <- tryCatch(
+      readxts2(dir=f_dir,fname=paste0(sym,".csv"),daterange=daterange),
+      error=function(e) NA
+    )
+    if(class(x)[1] != "xts"){
+      print(paste("Data for ",sym," is empty!"))
+      next()}
+    x <- x[,cname]
+    col_names <- c(col_names,sym)
+    M[[i]] <- x
+  }
+  M <- do.call(cbind,M)
+  names(M) <- col_names
+  return(M)
+}
+
+
+
