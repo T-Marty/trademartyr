@@ -606,6 +606,11 @@ return_sim <- function(weights,K_m=6,DF_rets,
   stopCluster(mycluster)
   names(out) <- paste0("portfolio",1:K_m)
   rmat <- do.call(cbind, out) ;rm(out)
+  # Make first value in each column initial equity
+  for (i in 1:ncol(rmat)){
+    last_na <- which(!is.na(rmat[,i]))[1]-1
+    rmat[last_na,i] <- initEq
+  }
   rp <- xts(rowSums(na.trim(rmat)),order.by = index(na.trim(rmat)))
   return(list(rmat=rmat,rp=rp))
 }
@@ -673,8 +678,8 @@ alpha_table <- function(panel_list,factor_mat,model="CAPM",method="SCC",
     for (i in 1:length(panel_list)){
       rpmat <- na.omit(panel_list[[i]])
       if(to_monthly){
-        out <- apply(rpmat,2,FUN=function(x)
-        {as.numeric(quantmod::monthlyReturn(na.omit(x)))})
+        out <- sapply(1:ncol(rpmat),FUN=function(x){
+          as.numeric(quantmod::monthlyReturn(na.omit(rpmat[,x])))})
         rpmat <- xts::xts(out,index(xts::to.monthly(rpmat)))
       } else{
         rpmat <- PerformanceAnalytics::Return.calculate(rpmat,"discrete")
@@ -682,9 +687,9 @@ alpha_table <- function(panel_list,factor_mat,model="CAPM",method="SCC",
       tm <- index(rpmat)
       rpmat <- data.frame(cbind(date=1,rp=rowMeans(rpmat,na.rm = TRUE)))
       rpmat$date <- tm
-      rpmat <- merge(rpmat,ff3)
+      rpmat <- merge(rpmat,factor_mat)
       reg_model <- lm(fmla,data=rpmat)
-      coefs <- as.matrix(coeftest(capm_model, vcov. = vcovSCC))
+      coefs <- as.matrix(coeftest(reg_model, vcov.=vcov_))
       alpha1[i] <- round(coefs[1,1],4)
       p1[i] <- round(coefs[1,4],4)
     }

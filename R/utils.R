@@ -761,6 +761,7 @@ news_days <- function(dn, n=1, on="months", ind=NULL, from_first=TRUE,
       }
     }
   }
+  nmat[1:n,] <- NA
   return(nmat)
 }
 
