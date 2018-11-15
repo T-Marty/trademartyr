@@ -15,9 +15,9 @@ panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
   }
   rp_list <- list()
   for (i in 1:ncol(rpmat)){
-    x <- na.omit(rpmat[,i])
+    x <- zoo::na.trim(rpmat[,i])
     if(to_monthly){
-      x <- quantmod::monthlyReturn(x)
+      x <- quantmod::monthlyReturn(x,leading=FALSE)
       index(x) <- as.yearmon(index(x))
     } else{
       x <- PerformanceAnalytics::Return.calculate(x,method = "discrete")
@@ -34,7 +34,7 @@ panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
     rp_list[[i]] <- x[,c("date",names(x)[names(x)!="date"])]
   }
   rp_list <- do.call(rbind,rp_list)
-  return(rp_list)
+  return(na.omit(rp_list))
 }
 
 #' Function to load Fama French 3 factor data
@@ -179,7 +179,9 @@ inter_quantile_table_eq <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
   }
   # Convert to monthly returns
   if(to_monthly){
-    rp_list <- lapply(rp_list,function(x) quantmod::monthlyReturn(na.omit(x)))
+    rp_list <- lapply(rp_list,
+                      function(x) quantmod::monthlyReturn(na.omit(x),
+                                                          leading=FALSE))
   }
   rp_list <- do.call(cbind,rp_list)
   names(rp_list) <- names(weight_list)
@@ -486,7 +488,8 @@ append_group <- function(pmat,Vars,groupings,Id="ticker"){
 #' Function to get different types of mean return from portfolio return object.
 mean_return <- function(rpmat,overlapping=TRUE){
   rp <- lapply(1:ncol(rpmat),
-               FUN=function(x) quantmod::monthlyReturn(na.omit(rpmat[,x])))
+               FUN=function(x) quantmod::monthlyReturn(na.omit(rpmat[,x]),
+                                                       leading=FALSE))
   rp <- do.call(cbind,rp)
   if (overlapping){
     rp <- na.omit(rp)
@@ -509,24 +512,40 @@ mean_return <- function(rpmat,overlapping=TRUE){
 #' Function to remove no-invest periods in portfolio simulation results.
 #' @description Trading resumes at next entry date for a given K portfolio.
 #' In this ways, portfolios are still staggered after event period.
-gfc_adjust <- function(rmat,weights,K_m,date1,date2,whole_months=TRUE){
+gfc_adjust <- function(rmat,weights,K_m,date1,date2,whole_months=TRUE,
+                       overlapping_only=FALSE){
   date1 <- as.Date(date1)
   date2 <- as.Date(date2)
-  rmat <- simpleRets(rmat)
+  init_vals <- apply(rmat,2,function(x) as.numeric(na.omit(x)[1]))
   adj_list <- list()
   for (i in 1:ncol(rmat)){
     x <- na.omit(rmat[,i])
+    x <- diff(log(x))
+    x[1,] <- 0
     wi <- weights_i(weights,start_i=i,k=K_m)[[2]]
     d2i <- index(wi)[which(index(wi)>=date2)[1]]
     d1i <- GFC1
     if(whole_months){d1i <- floor_date(d1i,"months")}
-    x[index(x) >= d1i & index(x) <= d2i] <- 0
-    x <- cumprod(1+x)
+    if(!overlapping_only){
+      x[index(x) >= d1i & index(x) <= d2i] <- 0
+      x <- exp(cumsum(x))*init_vals[i]
+    }
     x[index(x) >= d1i & index(x) <= d2i] <- NA
     adj_list[[i]] <- x
   }
   adj_list <- do.call(cbind,adj_list)
   names(adj_list) <- names(rmat)
+  if(overlapping_only){
+    # Want to keep original index, but everywhere without full overlap make NA
+    tm0 <- index(adj_list)
+    tm <- index(na.trim(adj_list))
+    adj_list <- na.omit(adj_list)
+    adj_list <- cbind(adj_list,tm)
+    nas <- which(is.na(adj_list[,1]))
+    adj_list <- exp(cumsum(na.fill(adj_list,0)))
+    adj_list[nas,] <- NA
+    adj_list <- cbind(adj_list,tm0)
+  }
   return(adj_list)
 }
 
@@ -664,7 +683,7 @@ alpha_table <- function(panel_list,factor_mat,model="CAPM",method="SCC",
     p1 <- numeric(length(panel_list))
     for (i in 1:length(panel_list)){
       rpmat <- panel_list[[i]]
-      rp_panel <- panelise_rp(na.omit(rpmat),ind_mat = factor_mat,
+      rp_panel <- panelise_rp(rpmat,ind_mat = factor_mat,
                               to_monthly=to_monthly)
       reg_model <- plm(fmla,data=rp_panel,index=c("date","portfolio"),
                        model="pooling")
@@ -676,16 +695,19 @@ alpha_table <- function(panel_list,factor_mat,model="CAPM",method="SCC",
     alpha1 <- numeric(length(panel_list))
     p1 <- numeric(length(panel_list))
     for (i in 1:length(panel_list)){
-      rpmat <- na.omit(panel_list[[i]])
+      rpmat <- zoo::na.trim(panel_list[[i]])
       if(to_monthly){
-        out <- sapply(1:ncol(rpmat),FUN=function(x){
-          as.numeric(quantmod::monthlyReturn(na.omit(rpmat[,x])))})
-        rpmat <- xts::xts(out,index(xts::to.monthly(rpmat)))
+        out <- lapply(1:ncol(rpmat),
+                      FUN=function(x){quantmod::monthlyReturn(rpmat[,x],
+                                                              leading=FALSE)})
+        out <- do.call(cbind,out)
+        index(out) <- as.yearmon(index(out))
+        rpmat <- na.omit(out)
       } else{
         rpmat <- PerformanceAnalytics::Return.calculate(rpmat,"discrete")
       }
       tm <- index(rpmat)
-      rpmat <- data.frame(cbind(date=1,rp=rowMeans(rpmat,na.rm = TRUE)))
+      rpmat <- data.frame(cbind(date=1,rp=rowMeans(rpmat,na.rm = FALSE)))
       rpmat$date <- tm
       rpmat <- merge(rpmat,factor_mat)
       reg_model <- lm(fmla,data=rpmat)
