@@ -726,3 +726,60 @@ alpha_table <- function(panel_list,factor_mat,model="CAPM",method="SCC",
   return(capm_table1)
 }
 
+#' Function for holding period event response from overlapping return matrix.
+#' @description Limited function for event plot from overlapping return matrix.
+#' Default shows average holding period cumulative return by month. I.e.
+#' average of all holding period equity (normalised) stacked on top of
+#' one another.
+#' If returns=TRUE, function averages holding period return each month - the
+#' result then shows the average holding period return if all portfolio
+#' holding periods were being held at the same time and equal-weighted
+#' rebalanced each month (although the stocks within each holding period) are
+#' buy-hold, or whatever the strategy implemented.
+#' Made to be used directly from strategy output.
+event_from_rmat <- function(rmat,K_m,verbose=FALSE,returns=FALSE){
+  res_list <- vector('list',ncol(rmat))
+  if(returns){
+    for (i in 1:ncol(rmat)){
+      x <- na.omit(rmat[,i])
+      #x <- to.monthly(x,indexAt = "endof")
+      #x <- x$x.Close
+      x <- na.omit(monthlyReturn(x,leading = FALSE))
+      res_mat <- data.frame(matrix(nrow=ceiling(nrow(x)/K_m),ncol=(K_m+2)))
+      names(res_mat) <- c("date",paste0("m",0:K_m))
+      res_mat$m0 <- 0
+      for (j in 1:ceiling(nrow(x)/K_m)){
+        rpsub <- x[(K_m*j-K_m+1):min((K_m*j),nrow(x))]
+        res_mat$date[j] <- as.Date(index(rpsub)[1])
+        res_mat[j,paste0("m",1:nrow(rpsub))] <- as.numeric(as.numeric(rpsub))
+      }
+      res_list[[i]] <- res_mat
+    }
+    res_list <- do.call(rbind,res_list)
+    if(verbose){
+      return(res_list)
+    }
+    return(colMeans(res_list[,-1],na.rm = TRUE))
+  } else{
+    for (i in 1:ncol(rmat)){
+      x <- rmat[,i]
+      x <- na.omit(x)
+      x <- to.monthly(x,indexAt = "endof")
+      x <- x$x.Close
+      res_mat <- data.frame(matrix(nrow=ceiling(nrow(x)/K_m),ncol =(K_m+2)))
+      names(res_mat) <- c("date",paste0("m",0:K_m))
+      for (j in 1:ceiling(nrow(x)/K_m)){
+        rpsub <- x[(K_m*j+1-K_m):min(((K_m*j+1)),nrow(x))]
+        rpsub <- rpsub/as.numeric(rpsub[1,1])
+        res_mat$date[j] <- as.Date(index(rpsub)[1])
+        res_mat[j,paste0("m",0:(nrow(rpsub)-1))] <- as.numeric(as.numeric(rpsub))
+      }
+      res_list[[i]] <- res_mat
+    }
+    res_list <- do.call(rbind,res_list)
+    if(verbose){
+      return(res_list)
+    }
+    return(colMeans(res_list[,-1],na.rm = TRUE)-1)
+  }
+}
