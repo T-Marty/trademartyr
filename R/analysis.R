@@ -667,17 +667,14 @@ remove_discordant_bruce <- function(primary_ranks,Raw,TopN){
 
 #' Function to run factor regressions and neatly present results.
 #' Allows for panel-style or mean overlapping return analysis.
-alpha_table <- function(panel_list,factor_mat,model="CAPM",method="SCC",
-                        vcov_=sandwich::NeweyWest,to_monthly=TRUE){
-
-  if(model=="CAPM"){
-    fmla=I(rp-RF)~Mkt_RF
-  } else if(model=="FF3"){
-    fmla = I(rp-RF)~Mkt_RF+HML+SMB
-  } else if(model=="FF5"){
-    fmla = fmla = I(rp-RF)~Mkt_RF+HML+SMB+RMW+CMA
-  }
-  if(method=="SCC"){
+alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
+                        method=c("Panel","Fama"),vcov_panel=plm::vcovSCC,
+                        vcov_fama=sandwich::NeweyWest,to_monthly=TRUE){
+  method = match.arg(method)
+  model = match.arg(model)
+  fmla <- switch(model, CAPM=I(rp-RF)~Mkt_RF, FF3=I(rp-RF)~Mkt_RF+HML+SMB,
+                 FF5=I(rp-RF)~Mkt_RF+HML+SMB+RMW+CMA,TS=rp~1)
+  if(method=="Panel"){
     # Method 1 - SCC Panel
     alpha1 <- numeric(length(panel_list))
     p1 <- numeric(length(panel_list))
@@ -685,9 +682,9 @@ alpha_table <- function(panel_list,factor_mat,model="CAPM",method="SCC",
       rpmat <- panel_list[[i]]
       rp_panel <- panelise_rp(rpmat,ind_mat = factor_mat,
                               to_monthly=to_monthly)
-      reg_model <- plm(fmla,data=rp_panel,index=c("date","portfolio"),
+      reg_model <- plm(fmla,data=rp_panel,index=c("portfolio","date"),
                        model="pooling")
-      coefs <- as.matrix(coeftest(reg_model, vcov. = vcovSCC))
+      coefs <- as.matrix(coeftest(reg_model, vcov. = vcov_panel))
       alpha1[i] <- round(coefs[1,1],4)
       p1[i] <- round(coefs[1,4],4)
     }
@@ -711,7 +708,7 @@ alpha_table <- function(panel_list,factor_mat,model="CAPM",method="SCC",
       rpmat$date <- tm
       rpmat <- merge(rpmat,factor_mat)
       reg_model <- lm(fmla,data=rpmat)
-      coefs <- as.matrix(coeftest(reg_model, vcov.=vcov_))
+      coefs <- as.matrix(coeftest(reg_model, vcov.=vcov_fama))
       alpha1[i] <- round(coefs[1,1],4)
       p1[i] <- round(coefs[1,4],4)
     }
@@ -782,4 +779,33 @@ event_from_rmat <- function(rmat,K_m,verbose=FALSE,returns=FALSE){
     }
     return(colMeans(res_list[,-1],na.rm = TRUE)-1)
   }
+}
+
+#' Thompson (2011) Estimator for two-way clustering plus spatial correlation.
+vcovThompson <- function(x, maxlag = NULL, ...) {
+  w1 <- function(j, maxlag) 1
+  VsccL.1 <- vcovSCC(x, maxlag = maxlag, wj = w1, ...)
+  Vcx <- vcovHC(x, cluster = "group", method = "arellano", ...)
+  VnwL.1 <- vcovSCC(x, maxlag = maxlag, inner = "white", wj = w1, ...)
+  return(VsccL.1 + Vcx - VnwL.1)
+}
+
+#' High-level sandwhich::kweights wrapper to pass to plm.
+kern_weights <- function(j, maxlag=NULL,
+                         kern=c("Bartlett","Truncated","Parzen",
+                                "Tukey-Hanning","Quadratic Spectral")){
+  kern=match.arg(kern)
+  if(kern=="Bartlett"){
+    return(max((1-j/(maxlag+1)),0))
+  }
+  b = j/maxlag
+  return(sandwich::kweights(b,kern))
+}
+
+#' High-level plm::vcovSCC wrapper for Driscoll and Kraay's SCC estimator.
+#' Allows easier specification of kernel smoother.
+vcovDK <- function(x,maxlag=NULL,kern){
+  maxlag <- ifelse(is.null(maxlag),ceiling((max(pdim(x)$Tint$Ti))^(1/4)),maxlag)
+  plm::vcovSCC(x, maxlag=maxlag,
+               wj=function(j,maxlag){kern_weights(j,maxlag,kern)})
 }
