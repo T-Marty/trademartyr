@@ -115,14 +115,14 @@ cross_quantile_table <- function(Vars,groupings,K_m,diff=TRUE,
     }
   }
   # Get mean monthly stats
-  tab <- sapply(rp_list,mean_return)
+  tab <- sapply(rp_list,mean_return,leading=TRUE)
   ps <- tab[3,]
   tab[1:2,] <- format(round(tab[1:2,],4),scientific = FALSE)
   tab <- apply(tab,2,FUN=function(x) sub(".*? (.+)", "\\1",x))
-  tab[1,] <- paste0(tab[1,]," (",tab[2,],")")
   tab[1,ps < 0.05] <- paste0(tab[1,ps < 0.05],"*")
   tab[1,ps < 0.01] <- paste0(tab[1,ps < 0.01],"*")
   tab[1,ps < 0.001] <- paste0(tab[1,ps < 0.001],"*")
+  tab[1,] <- paste0(tab[1,]," (",tab[2,],")")
   tab <- matrix(tab[1,],nrow=groupings[1],byrow=TRUE)
   colnames(tab) <- paste(1:ncol(tab))
   colnames(tab)[1:groupings[2]] <- paste0(names(Vars)[2],1:groupings[2])
@@ -169,7 +169,7 @@ inter_quantile_table_eq <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
     out <- foreach(start_i = 1:K_m) %dopar% {
       wts_i <- weights_i(weights, start_i, K_m, holding_time=FALSE )[[1]]
       rp <- rp_cum_rets(wts_i,DF_rets,stop_loss = 0.9)
-      initEq*rp
+      rp
     }
     stopCluster(mycluster)
     names(out) <- paste0("portfolio",1:K_m)
@@ -209,8 +209,9 @@ inter_quantile_table_eq <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
 #' Function to calculate and tabulate the mean return for every quantile
 #' portfolio in a single-sorted portfolio procedure.
 inter_quantile_table <- function(Vars,groupings,K_m,to_monthly=TRUE,diff=TRUE,
-                                    verbose=FALSE,remove_period=FALSE,
-                                 date1=NULL,date2=NULL,whole_months=TRUE){
+                                    verbose=FALSE,stop_loss=0.9,DF_rets,
+                                 remove_period=FALSE,date1=NULL,date2=NULL,
+                                 whole_months=TRUE){
   # Get groupings/ranks
   ranks <- multi_rank(Vars=Vars, groupings = groupings)
   # Get weight matrices for each group
@@ -237,13 +238,12 @@ inter_quantile_table <- function(Vars,groupings,K_m,to_monthly=TRUE,diff=TRUE,
     registerDoParallel(mycluster)
     out <- foreach(start_i = 1:K_m) %dopar% {
       wts_i <- weights_i(weights, start_i, K_m, holding_time=FALSE )[[1]]
-      rp <- rp_cum_rets(wts_i,DF_rets,stop_loss = 0.9)
-      initEq*rp
+      rp <- rp_cum_rets(wts_i,DF_rets,stop_loss = stop_loss)
+      rp
     }
     stopCluster(mycluster)
     names(out) <- paste0("portfolio",1:K_m)
     rp <- do.call(cbind,out)
-    #rp <- xts(rowSums(rp),order.by = index(rp))
     rp_list[[w]] <- rp
   }
   # Remove outlier periods (e.g, GFC) if applicable.
@@ -254,7 +254,7 @@ inter_quantile_table <- function(Vars,groupings,K_m,to_monthly=TRUE,diff=TRUE,
     }
   }
   # Get mean monthly stats
-  tab <- mean_return_table(rp_list)
+  tab <- mean_return_table(rp_list,leading = TRUE)
   tab <- data.frame(t(tab),stringsAsFactors = FALSE)
   # remove p-val
   tab[,2] <- sub(".*? (.+)", "\\1", tab[,2])
@@ -296,10 +296,10 @@ mean_return_table_eq <- function(comp_mat,sig=4){
 
 #' Function to display the mean, t-statistic and p-vals for each column of a
 #' equity time series as a table.
-mean_return_table <- function(rps,verbose=FALSE,sig=4){
+mean_return_table <- function(rps,verbose=FALSE,sig=4,leading=FALSE){
   nms <- names(rps)
   if(is.null(nms)){nms <- paste0("P",1:length(rps))}
-  tab <- sapply(rps,mean_return)
+  tab <- sapply(rps,mean_return,leading=leading)
   ps <- tab[3,]
   tab <- format(round(tab,4),scientific = FALSE)
   tab <- apply(tab,2,stringr::str_trim)
@@ -312,7 +312,7 @@ mean_return_table <- function(rps,verbose=FALSE,sig=4){
   rownames(tab) <- c("mean","p (t-stat)")
   colnames(tab) <- nms
   if(verbose){
-    num=t(sapply(rps,mean_return))
+    num=t(sapply(rps,mean_return,leading=leading))
     colnames(num) <- c("mean","t-stat","p-val")
     return(list(res_mat=data.frame(tab),num=num))
   }
@@ -486,10 +486,10 @@ append_group <- function(pmat,Vars,groupings,Id="ticker"){
 }
 
 #' Function to get different types of mean return from portfolio return object.
-mean_return <- function(rpmat,overlapping=TRUE){
+mean_return <- function(rpmat,overlapping=TRUE,leading=FALSE){
   rp <- lapply(1:ncol(rpmat),
                FUN=function(x) quantmod::monthlyReturn(na.omit(rpmat[,x]),
-                                                       leading=FALSE))
+                                                       leading=leading))
   rp <- do.call(cbind,rp)
   if (overlapping){
     rp <- na.omit(rp)
