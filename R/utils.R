@@ -151,7 +151,7 @@ nyse_trading_dates <- function(start_date, end_date, freq="days", tz="UTC"){
 trading_dates <- function(start_date, end_date, freq="days", tz="UTC",
                           loc="NYSE"){
   loc <- tolower(loc)[1]
-  if(length(intersect(loc,c("nyse","london","tsx","zurich","nerc"))) < 1){
+  if(length(intersect(loc,c("nyse","asx","london","tsx","zurich","nerc"))) < 1){
     stop('loc must be one of: "NYSE","London","TSX","Zurich","NERC"')
   }
   f <- function(x){
@@ -185,6 +185,9 @@ clean_hist_members <- function(hist_members,hist_index="SP500"){
     names(hist_members)[which(names(hist_members)=='WELL')] <- "HCN"
     names(hist_members)[which(names(hist_members)=='BKNG')] <- "PCLN"
     hist_members <- hist_members[,-(which(member_names=="1437355D"))] # Empty data
+  }
+  if(hist_index=="ASX200"){
+    hist_members <- hist_members[,-(which(member_names=="IGR"))]
   }
   return(hist_members)
 }
@@ -1011,5 +1014,17 @@ get_cols_large <- function(assets,f_dir,cname,daterange=NULL){
   return(M)
 }
 
-
+#' Gets trading ASX days from xts of reference stocks by removing days with no
+#' trading. I.e. if any stock has price data on a given day, that day is
+#' assumed to be a trading day.
+asx_trading_dates <- function(df_cl=NULL,file_path=processed_dir){
+  if(is.null(df_cl)){
+    trade_dates <- readRDS(file.path(processed_dir,
+                                     "asx200_trade_dates.RDS"))
+    return(trade_dates)
+  }
+  k <- apply(df_cl,1,function(x) sum(!is.na(x)))
+  trade_dates <- index(df_cl)[k!=0]
+  return(trade_dates)
+}
 
