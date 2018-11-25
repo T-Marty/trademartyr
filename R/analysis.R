@@ -67,7 +67,7 @@ load_fama_french <- function(ffdir,as_df=TRUE,freq="monthly"){
 #' portfolio in a double-sorted portfolio formation procedure. The returns
 #' to a long-short portfolio of the most extreme second layer quantiles within
 #' each first-layer quantile is also provided.
-cross_quantile_table <- function(Vars,groupings,K_m,diff=TRUE,
+cross_quantile_table <- function(Vars,groupings,K_m,hhll=FALSE,
                                  verbose=TRUE,remove_period=FALSE,date1=NULL,
                                  date2=NULL,whole_months=TRUE){
   # Get groupings/ranks
@@ -82,13 +82,22 @@ cross_quantile_table <- function(Vars,groupings,K_m,diff=TRUE,
       names(weight_list)[l] <- paste0(names(Vars)[1],i,names(Vars)[2],j)
       l <- l+1
     }
-    if(diff){ # Get long-short weights
-      x <- get_weights_mr(ranks,long_g = c(i,1),short_g=c(i,groupings[2]))
-      weight_list[[l]] <- x
-      names(weight_list)[l] <- paste0(names(Vars)[1],i,names(Vars)[2],"1-",
-                                      groupings[2])
-      l <- l+1
-    }
+    # Get long-short weights
+    x <- get_weights_mr(ranks,long_g = c(i,1),short_g=c(i,groupings[2]))
+    weight_list[[l]] <- x
+    names(weight_list)[l] <- paste0(names(Vars)[1],
+                                    i,names(Vars)[2],"1-",names(Vars)[1],i,
+                                    names(Vars)[2],groupings[2])
+    l <- l+1
+  }
+  if(hhll){
+    #get_extremes
+    x <- get_weights_mr(ranks,long_g=c(1,1),
+                        short_g=c(groupings[1],groupings[2]))
+    weight_list[[l]] <- x
+    names(weight_list)[l] <- paste0(names(Vars)[1],"1",
+                                    names(Vars)[2],"1-",names(Vars)[1],
+                                    groupings[1],names(Vars)[2],groupings[2])
   }
   # Perform simulations for each weight matrix
   rp_list <- list()
@@ -105,7 +114,7 @@ cross_quantile_table <- function(Vars,groupings,K_m,diff=TRUE,
     stopCluster(mycluster)
     names(out) <- paste0("portfolio",1:K_m)
     rp <- do.call(cbind,out)
-    rp <- xts(rowSums(rp),order.by = index(rp))
+    #rp <- xts(rowSums(rp),order.by = index(rp))
     rp_list[[w]] <- rp
   }
   if(remove_period){
@@ -123,14 +132,20 @@ cross_quantile_table <- function(Vars,groupings,K_m,diff=TRUE,
   tab[1,ps < 0.01] <- paste0(tab[1,ps < 0.01],"*")
   tab[1,ps < 0.001] <- paste0(tab[1,ps < 0.001],"*")
   tab[1,] <- paste0(tab[1,]," (",tab[2,],")")
+  if(hhll){
+    hh_ll <- tab[1,ncol(tab)]
+    tab <- tab[,-ncol(tab)]
+  }
   tab <- matrix(tab[1,],nrow=groupings[1],byrow=TRUE)
   colnames(tab) <- paste(1:ncol(tab))
   colnames(tab)[1:groupings[2]] <- paste0(names(Vars)[2],1:groupings[2])
-  if(diff){
-    colnames(tab)[groupings[2]+1] <- paste0(colnames(tab)[1],"-",
+  colnames(tab)[groupings[2]+1] <- paste0(colnames(tab)[1],"-",
                                             colnames(tab)[groupings[2]])
-  }
   rownames(tab) <- paste0(names(Vars)[1],1:nrow(tab))
+  if(hhll){
+    tab <- rbind(tab,c(hh_ll,rep("",ncol(tab)-1)))
+    rownames(tab)[nrow(tab)] <- paste0("11-",groupings[1],groupings[2])
+  }
   if(verbose){
     names(rp_list) <- names(weight_list)
     return(list(res_table=tab, portfolios=rp_list))
