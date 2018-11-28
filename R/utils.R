@@ -97,7 +97,7 @@ clean_names <- function(symbolList, totalReturn=FALSE,Member=FALSE,ind=NULL,
 #' @param ndays The maximum number of days from NA from which to find data.
 #' @note NEED TO REMOVE Automatic NYSE trading days.
 #'@export
-naFillFrom <- function(df, firstDay=FALSE, fromNext=FALSE, ndays=2, ind=NULL,
+naFillFrom <- function(df, firstDay=FALSE, fromNext=FALSE, ndays=5, ind=NULL,
                        on="months"){
   k=1
   if (fromNext){k=-1}
@@ -151,7 +151,7 @@ nyse_trading_dates <- function(start_date, end_date, freq="days", tz="UTC"){
 trading_dates <- function(start_date, end_date, freq="days", tz="UTC",
                           loc="NYSE"){
   loc <- tolower(loc)[1]
-  if(length(intersect(loc,c("nyse","london","tsx","zurich","nerc"))) < 1){
+  if(length(intersect(loc,c("nyse","asx","london","tsx","zurich","nerc"))) < 1){
     stop('loc must be one of: "NYSE","London","TSX","Zurich","NERC"')
   }
   f <- function(x){
@@ -176,15 +176,19 @@ trading_dates <- function(start_date, end_date, freq="days", tz="UTC",
 #' @param hist_members xts object containing membership data. Column names are
 #' assumed to be asset names corresponding to those in df. Note: All entries
 #' not NA are assumed to represent active membership.
-clean_hist_members <- function(hist_members){
-  hist_members <- readRDS(file.path(compDir,'HM_new.RDS'))
-  names(hist_members)[which(names(hist_members)=='CBRE US')] <- "CBG US"
-  names(hist_members)[which(names(hist_members)=='WELL US')] <- "HCN US"
-  names(hist_members)[which(names(hist_members)=='BKNG US')] <- "PCLN US"
-  sp500 <- gsub("/","_",names(hist_members))
-  sp500 <- gsub(" US","",sp500)
-  names(hist_members) <- sp500
-  hist_members <- hist_members[,-(which(sp500=="1437355D"))] # Empty data
+clean_hist_members <- function(hist_members,hist_index="SP500"){
+  member_names <- gsub("/","_",names(hist_members))
+  member_names <- gsub("\ .*","",member_names)
+  names(hist_members) <- member_names
+  if(hist_index=="SP500"){
+    names(hist_members)[which(names(hist_members)=='CBRE')] <- "CBG"
+    names(hist_members)[which(names(hist_members)=='WELL')] <- "HCN"
+    names(hist_members)[which(names(hist_members)=='BKNG')] <- "PCLN"
+    hist_members <- hist_members[,-(which(member_names=="1437355D"))] # Empty data
+  }
+  if(hist_index=="ASX200"){
+    hist_members <- hist_members[,-(which(member_names=="IGR"))]
+  }
   return(hist_members)
 }
 
@@ -588,61 +592,85 @@ allocate_news <- function(d_n, nyse=TRUE, eod_h=16, eod_tz="EST", ind=NULL){
   return(d_n)
 }
 
-#' Function to calculate daily news scores from xts of news data
+#' Function to calculate daily news scores from xts of news data.
+#' Applied to output of `allocate_news`.
+#' "by_story" aggregates to story level first
 daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
   news_type <- tolower(news_type)
-  if(!(news_type %in% c("all", "combined", "stories", "alerts"))){
-    warning(paste('news_type must be one of "all", "combined", "stories",',
-                  'or "alerts". Assuming "all".'))
+  if(!(news_type %in% c("all", "combined", "takes", "alerts","by_story"))){
+    warning(paste('news_type must be one of "all", "combined", "takes",',
+                  '"by_story", or "alerts". Assuming "all".'))
     news_type <- "all"
   }
   if(is.null(ind)){ind <- unique(index(dn))}
   tm <- index(dn)
   dn <- as.data.frame(dn, stringsAsFactors=FALSE)
+  dn <- utils::type.convert(dn)
   dn$date <- tm
   row.names(dn)<- NULL
   dn <- subset(dn, relevance >= min_relevance)
+
+  if(news_type =="by_story"){
+    dn <- dplyr::group_by(dn, date, altId)
+    smt <- dplyr::summarise(dn,
+                            t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance),story_relevance=mean(relevance),
+                            n_alerts=sum(urgency==1),n_takes=sum(urgency==3))
+    # Aggregate by day
+    smt <- dplyr::group_by(smt, date)
+    smt <- dplyr::summarise(smt,t_sent=
+                              sum(story_relevance*t_sent)/sum(story_relevance),
+                            alerts=sum(n_alerts),takes=sum(n_takes),
+                            stories=n())
+
+    smt <- xts(smt[,setdiff(names(smt),"date")],order.by = as.Date(smt$date))
+    smt <- cbind(smt,ind)
+    smt$stories[is.na(smt$stories)] <- 0
+    smt$alerts[is.na(smt$alerts)] <- 0
+    smt$takes[is.na(smt$takes)] <- 0
+    return(smt)
+  }
   dn <- dplyr::group_by(dn, date)
   if(news_type =="all"){
-    sms <- dplyr::summarise(subset(dn, urgency==3), stories=n(),
-                     s_sent=sum(relevance*(sentimentPositive-sentimentNegative))
-                     /sum(relevance))
+    sms <- dplyr::summarise(subset(dn, urgency==3), takes=n(),
+                            s_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance))
     sma <- dplyr::summarise(subset(dn, urgency==1), alerts=n(),
-                     a_sent=sum(relevance*(sentimentPositive-sentimentNegative))
-                     /sum(relevance))
+                            a_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance))
     smt <- dplyr::summarise(dn,
-                     t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
-                     /sum(relevance))
+                            t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance))
     sms <- xts(sms[,setdiff(names(sms),"date")],order.by = as.Date(sms$date))
     sma <- xts(sma[,setdiff(names(sma),"date")],order.by = as.Date(sma$date))
     smt <- xts(smt[,setdiff(names(smt),"date")],order.by = as.Date(smt$date))
     dc <- cbind(cbind(smt,sms,sma),ind)
-    dc$stories[is.na(dc$stories)] <- 0
+    dc$takes[is.na(dc$takes)] <- 0
     dc$alerts[is.na(dc$alerts)] <- 0
     return(dc)
   }
   if(news_type =="combined"){
     smt <- dplyr::summarise(dn,
-                     t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
-                     /sum(relevance),n=n())
+                            t_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance),items=n())
     smt <- xts(smt[,setdiff(names(smt),"date")],order.by = as.Date(smt$date))
     smt <- cbind(smt,ind)
-    smt$n[is.na(smt$n)] <- 0
+    smt$items[is.na(smt$n)] <- 0
     return(smt)
   }
-  if(news_type =="stories"){
-    sms <- dplyr::summarise(subset(dn, urgency==3), stories=n(),
-                     s_sent=sum(relevance*(sentimentPositive-sentimentNegative))
-                     /sum(relevance))
+  if(news_type =="takes"){
+    sms <- dplyr::summarise(subset(dn, urgency==3), takes=n(),
+                            s_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance))
     sms <- xts(sms[,setdiff(names(sms),"date")],order.by = as.Date(sms$date))
     sms <- cbind(sms,ind)
-    sms$stories[is.na(sms$stories)] <- 0
+    sms$takes[is.na(sms$takes)] <- 0
     return(sms)
   }
   if(news_type =="alerts"){
     sma <- dplyr::summarise(subset(dn, urgency==1), alerts=n(),
-                     a_sent=sum(relevance*(sentimentPositive-sentimentNegative))
-                     /sum(relevance))
+                            a_sent=sum(relevance*(sentimentPositive-sentimentNegative))
+                            /sum(relevance))
     sma <- xts(sma[,setdiff(names(sma),"date")],order.by = as.Date(sma$date))
     sma <- cbind(sma,ind)
     sma$alerts[is.na(sma$alerts)] <- 0
@@ -693,12 +721,12 @@ aggregate_news <- function(dn, n=1, w=1, on="months", ind=NULL, from_first=TRUE)
 
 #' Temporary function to load and return news data and convert to xts
 #' (does not put in environment)
-load_news_file <- function(fDir, Fname, col_names = NULL){
+load_news_file <- function(f_dir, f_name, col_names = NULL){
   if(is.null(col_names)){
     col_names <- c("feedTimestamp","relevance","urgency","sentimentClass",
-                   "sentimentPositive","sentimentNegative")
+                   "sentimentPositive","sentimentNegative","altId")
   }
-  x <- read_csv(file.path(trnaDir,paste0(assets[i],".csv")))
+  x <- read_csv(file.path(f_dir,paste0(f_name,".csv")))
   x <- x[,col_names]
   x <- as.xts(x[,-which(names(x)=="feedTimestamp")],
               order.by = x$feedTimestamp)
@@ -736,6 +764,7 @@ news_days <- function(dn, n=1, on="months", ind=NULL, from_first=TRUE,
       }
     }
   }
+  nmat[1:n,] <- NA
   return(nmat)
 }
 
@@ -799,12 +828,16 @@ median_adjust_deprecated <- function(ns,hist_members=newHM){
 #' to represent non-membership (as output by Bloomberg wrappers)
 #' Note also that news data for all non-members will be zero.
 median_adjust <- function(ns,hist_members=newHM,func=median){
+  # need to recall which rows have no data
+  no_data <- apply(ns,1,function(x) sum(is.na(x))) == ncol(ns)
   hist_members <- hist_members[index(ns),names(ns)]
   ns <- ns*hist_members # This makes non-member news data NA
   ns <- ns-apply(ns,1,func,na.rm=TRUE)
   # Fill all NAs with zeros, but make non-members NA again, since they were not
   # median-adjusted and their zero-values will be meaningless.
   ns <- zoo::na.fill(ns,0)*hist_members
+  # also make rows with no data NA again
+  ns[no_data,] <- NA
   return(ns)
 }
 
@@ -942,7 +975,7 @@ xts_to_df <- function(x, datecol="date"){
   return(x)
 }
 
-# Function to load and combine raw trna news and score files
+#' Function to load and combine raw trna news and score files
 load_raw_news_files <- function(Dir,n_file,s_file,scorenames, newsnames){
   df <- read_tsv(file.path(Dir,s_file))
   df <- df[,scorenames]
@@ -950,3 +983,48 @@ load_raw_news_files <- function(Dir,n_file,s_file,scorenames, newsnames){
   dn <- dn[,newsnames]
   return(inner_join(df,dn,by='id'))
 }
+
+#' Gets columns of all symbols (e.g. close price) by loading each
+#' file and discarding it, rather than needed all files loading in
+#' Global environmnet.
+get_cols_large <- function(assets,f_dir,cname,daterange=NULL){
+  p_list <- list.files(f_dir)
+  no_data <- assets[!(paste0(assets,".csv") %in% p_list)]
+  col_names = c()
+  if(length(no_data) >= 1){
+    print(paste("No Data Found For ",no_data))
+  }
+  M <- list()
+  for ( i in 1:length(assets)){
+    sym <- assets[i]
+    if(sym %in% no_data){next()}
+    x <- tryCatch(
+      readxts2(dir=f_dir,fname=paste0(sym,".csv"),daterange=daterange),
+      error=function(e) NA
+    )
+    if(class(x)[1] != "xts"){
+      print(paste("Data for ",sym," is empty!"))
+      next()}
+    x <- x[,cname]
+    col_names <- c(col_names,sym)
+    M[[i]] <- x
+  }
+  M <- do.call(cbind,M)
+  names(M) <- col_names
+  return(M)
+}
+
+#' Gets trading ASX days from xts of reference stocks by removing days with no
+#' trading. I.e. if any stock has price data on a given day, that day is
+#' assumed to be a trading day.
+asx_trading_dates <- function(df_cl=NULL,file_path=processed_dir){
+  if(is.null(df_cl)){
+    trade_dates <- readRDS(file.path(processed_dir,
+                                     "asx200_trade_dates.RDS"))
+    return(trade_dates)
+  }
+  k <- apply(df_cl,1,function(x) sum(!is.na(x)))
+  trade_dates <- index(df_cl)[k!=0]
+  return(trade_dates)
+}
+

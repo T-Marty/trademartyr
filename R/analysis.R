@@ -15,14 +15,17 @@ panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
   }
   rp_list <- list()
   for (i in 1:ncol(rpmat)){
-    x <- na.omit(rpmat[,i])
+    x <- zoo::na.trim(rpmat[,i])
     if(to_monthly){
-      x <- quantmod::monthlyReturn(x)
+      x <- quantmod::monthlyReturn(x,leading=FALSE)
       index(x) <- as.yearmon(index(x))
+    } else{
+      x <- PerformanceAnalytics::Return.calculate(x,method = "discrete")
     }
     names(x) <- "rp"
     tm <- index(x)
     x <- as.data.frame(x,row.names = FALSE)
+    if(grepl("POSIX",class(tm)[1])){tm <- as.Date(tm)}
     x$date <- tm
     x$portfolio <- names(rpmat)[i]
     if(!is.null(ind_mat)){
@@ -31,12 +34,20 @@ panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
     rp_list[[i]] <- x[,c("date",names(x)[names(x)!="date"])]
   }
   rp_list <- do.call(rbind,rp_list)
-  return(rp_list)
+  return(na.omit(rp_list))
 }
 
 #' Function to load Fama French 3 factor data
-load_fama_french <- function(ffdir,as_df=TRUE){
-  ff3 <- readr::read_csv(ffdir,skip = 3,n_max = 1104)
+load_fama_french <- function(ffdir,as_df=TRUE,freq="monthly"){
+  if(freq=="daily"){
+    ff3 <- readr::read_csv(ffdir,skip = 3)
+    names(ff3)[1] <- "date"
+    names(ff3)[grep("Mkt-",names(ff3),ignore.case = TRUE)] <- "Mkt_RF"
+    ff3$date <- ymd(ff3$date)
+    ff3 <- xts(ff3[,names(ff3)!="date"],order.by = ff3$date)
+    return(ff3/100)
+  }
+  ff3 <- readr::read_csv(ffdir,skip = 3,n_max = 663)
   names(ff3)[1] <- "date"
   names(ff3)[grep("Mkt-",names(ff3),ignore.case = TRUE)] <- "Mkt_RF"
   # append day to %Y%m format to allow conversion
@@ -56,7 +67,7 @@ load_fama_french <- function(ffdir,as_df=TRUE){
 #' portfolio in a double-sorted portfolio formation procedure. The returns
 #' to a long-short portfolio of the most extreme second layer quantiles within
 #' each first-layer quantile is also provided.
-cross_quantile_table <- function(Vars,groupings,K_m,diff=TRUE,
+cross_quantile_table <- function(Vars,groupings,K_m,hhll=FALSE,
                                  verbose=TRUE,remove_period=FALSE,date1=NULL,
                                  date2=NULL,whole_months=TRUE){
   # Get groupings/ranks
@@ -71,13 +82,22 @@ cross_quantile_table <- function(Vars,groupings,K_m,diff=TRUE,
       names(weight_list)[l] <- paste0(names(Vars)[1],i,names(Vars)[2],j)
       l <- l+1
     }
-    if(diff){ # Get long-short weights
-      x <- get_weights_mr(ranks,long_g = c(i,1),short_g=c(i,groupings[2]))
-      weight_list[[l]] <- x
-      names(weight_list)[l] <- paste0(names(Vars)[1],i,names(Vars)[2],"1-",
-                                      groupings[2])
-      l <- l+1
-    }
+    # Get long-short weights
+    x <- get_weights_mr(ranks,long_g = c(i,1),short_g=c(i,groupings[2]))
+    weight_list[[l]] <- x
+    names(weight_list)[l] <- paste0(names(Vars)[1],
+                                    i,names(Vars)[2],"1-",names(Vars)[1],i,
+                                    names(Vars)[2],groupings[2])
+    l <- l+1
+  }
+  if(hhll){
+    #get_extremes
+    x <- get_weights_mr(ranks,long_g=c(1,1),
+                        short_g=c(groupings[1],groupings[2]))
+    weight_list[[l]] <- x
+    names(weight_list)[l] <- paste0(names(Vars)[1],"1",
+                                    names(Vars)[2],"1-",names(Vars)[1],
+                                    groupings[1],names(Vars)[2],groupings[2])
   }
   # Perform simulations for each weight matrix
   rp_list <- list()
@@ -94,7 +114,7 @@ cross_quantile_table <- function(Vars,groupings,K_m,diff=TRUE,
     stopCluster(mycluster)
     names(out) <- paste0("portfolio",1:K_m)
     rp <- do.call(cbind,out)
-    rp <- xts(rowSums(rp),order.by = index(rp))
+    #rp <- xts(rowSums(rp),order.by = index(rp))
     rp_list[[w]] <- rp
   }
   if(remove_period){
@@ -104,22 +124,28 @@ cross_quantile_table <- function(Vars,groupings,K_m,diff=TRUE,
     }
   }
   # Get mean monthly stats
-  tab <- sapply(rp_list,mean_return)
+  tab <- sapply(rp_list,mean_return,leading=TRUE)
   ps <- tab[3,]
   tab[1:2,] <- format(round(tab[1:2,],4),scientific = FALSE)
   tab <- apply(tab,2,FUN=function(x) sub(".*? (.+)", "\\1",x))
-  tab[1,] <- paste0(tab[1,]," (",tab[2,],")")
   tab[1,ps < 0.05] <- paste0(tab[1,ps < 0.05],"*")
   tab[1,ps < 0.01] <- paste0(tab[1,ps < 0.01],"*")
   tab[1,ps < 0.001] <- paste0(tab[1,ps < 0.001],"*")
+  tab[1,] <- paste0(tab[1,]," (",tab[2,],")")
+  if(hhll){
+    hh_ll <- tab[1,ncol(tab)]
+    tab <- tab[,-ncol(tab)]
+  }
   tab <- matrix(tab[1,],nrow=groupings[1],byrow=TRUE)
   colnames(tab) <- paste(1:ncol(tab))
   colnames(tab)[1:groupings[2]] <- paste0(names(Vars)[2],1:groupings[2])
-  if(diff){
-    colnames(tab)[groupings[2]+1] <- paste0(colnames(tab)[1],"-",
+  colnames(tab)[groupings[2]+1] <- paste0(colnames(tab)[1],"-",
                                             colnames(tab)[groupings[2]])
-  }
   rownames(tab) <- paste0(names(Vars)[1],1:nrow(tab))
+  if(hhll){
+    tab <- rbind(tab,c(hh_ll,rep("",ncol(tab)-1)))
+    rownames(tab)[nrow(tab)] <- paste0("11-",groupings[1],groupings[2])
+  }
   if(verbose){
     names(rp_list) <- names(weight_list)
     return(list(res_table=tab, portfolios=rp_list))
@@ -158,7 +184,7 @@ inter_quantile_table_eq <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
     out <- foreach(start_i = 1:K_m) %dopar% {
       wts_i <- weights_i(weights, start_i, K_m, holding_time=FALSE )[[1]]
       rp <- rp_cum_rets(wts_i,DF_rets,stop_loss = 0.9)
-      initEq*rp
+      rp
     }
     stopCluster(mycluster)
     names(out) <- paste0("portfolio",1:K_m)
@@ -168,7 +194,9 @@ inter_quantile_table_eq <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
   }
   # Convert to monthly returns
   if(to_monthly){
-    rp_list <- lapply(rp_list,function(x) quantmod::monthlyReturn(na.omit(x)))
+    rp_list <- lapply(rp_list,
+                      function(x) quantmod::monthlyReturn(na.omit(x),
+                                                          leading=FALSE))
   }
   rp_list <- do.call(cbind,rp_list)
   names(rp_list) <- names(weight_list)
@@ -196,8 +224,9 @@ inter_quantile_table_eq <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
 #' Function to calculate and tabulate the mean return for every quantile
 #' portfolio in a single-sorted portfolio procedure.
 inter_quantile_table <- function(Vars,groupings,K_m,to_monthly=TRUE,diff=TRUE,
-                                    verbose=FALSE,remove_period=FALSE,
-                                 date1=NULL,date2=NULL,whole_months=TRUE){
+                                    verbose=FALSE,stop_loss=0.9,DF_rets,
+                                 remove_period=FALSE,date1=NULL,date2=NULL,
+                                 whole_months=TRUE){
   # Get groupings/ranks
   ranks <- multi_rank(Vars=Vars, groupings = groupings)
   # Get weight matrices for each group
@@ -224,13 +253,12 @@ inter_quantile_table <- function(Vars,groupings,K_m,to_monthly=TRUE,diff=TRUE,
     registerDoParallel(mycluster)
     out <- foreach(start_i = 1:K_m) %dopar% {
       wts_i <- weights_i(weights, start_i, K_m, holding_time=FALSE )[[1]]
-      rp <- rp_cum_rets(wts_i,DF_rets,stop_loss = 0.9)
-      initEq*rp
+      rp <- rp_cum_rets(wts_i,DF_rets,stop_loss = stop_loss)
+      rp
     }
     stopCluster(mycluster)
     names(out) <- paste0("portfolio",1:K_m)
     rp <- do.call(cbind,out)
-    #rp <- xts(rowSums(rp),order.by = index(rp))
     rp_list[[w]] <- rp
   }
   # Remove outlier periods (e.g, GFC) if applicable.
@@ -241,7 +269,7 @@ inter_quantile_table <- function(Vars,groupings,K_m,to_monthly=TRUE,diff=TRUE,
     }
   }
   # Get mean monthly stats
-  tab <- mean_return_table(rp_list)
+  tab <- mean_return_table(rp_list,leading = TRUE)
   tab <- data.frame(t(tab),stringsAsFactors = FALSE)
   # remove p-val
   tab[,2] <- sub(".*? (.+)", "\\1", tab[,2])
@@ -283,23 +311,23 @@ mean_return_table_eq <- function(comp_mat,sig=4){
 
 #' Function to display the mean, t-statistic and p-vals for each column of a
 #' equity time series as a table.
-mean_return_table <- function(rps,verbose=FALSE,sig=4){
+mean_return_table <- function(rps,verbose=FALSE,sig=4,leading=FALSE){
   nms <- names(rps)
   if(is.null(nms)){nms <- paste0("P",1:length(rps))}
-  tab <- sapply(rps,mean_return)
+  tab <- sapply(rps,mean_return,leading=leading)
   ps <- tab[3,]
   tab <- format(round(tab,4),scientific = FALSE)
   tab <- apply(tab,2,stringr::str_trim)
   tab[3,] <- paste0(tab[3,]," (",tab[2,],")")
-  tab[3,ps<0.05] <- paste0(tab[3,ps<0.05],"*")
-  tab[3,ps<0.01] <- paste0(tab[3,ps<0.01],"*")
-  tab[3,ps<0.001] <- paste0(tab[3,ps<0.001],"*")
+  tab[1,ps<0.05] <- paste0(tab[1,ps<0.05],"*")
+  tab[1,ps<0.01] <- paste0(tab[1,ps<0.01],"*")
+  tab[1,ps<0.001] <- paste0(tab[1,ps<0.001],"*")
   tab <- tab[-2,]
   tab <- matrix(tab,ncol=length(rps))
   rownames(tab) <- c("mean","p (t-stat)")
   colnames(tab) <- nms
   if(verbose){
-    num=t(sapply(rps,mean_return))
+    num=t(sapply(rps,mean_return,leading=leading))
     colnames(num) <- c("mean","t-stat","p-val")
     return(list(res_mat=data.frame(tab),num=num))
   }
@@ -477,9 +505,10 @@ append_group <- function(pmat,Vars,groupings,Id="ticker"){
 }
 
 #' Function to get different types of mean return from portfolio return object.
-mean_return <- function(rpmat,overlapping=TRUE){
+mean_return <- function(rpmat,overlapping=TRUE,leading=FALSE){
   rp <- lapply(1:ncol(rpmat),
-               FUN=function(x) quantmod::monthlyReturn(na.omit(rpmat[,x])))
+               FUN=function(x) quantmod::monthlyReturn(na.omit(rpmat[,x]),
+                                                       leading=leading))
   rp <- do.call(cbind,rp)
   if (overlapping){
     rp <- na.omit(rp)
@@ -502,24 +531,40 @@ mean_return <- function(rpmat,overlapping=TRUE){
 #' Function to remove no-invest periods in portfolio simulation results.
 #' @description Trading resumes at next entry date for a given K portfolio.
 #' In this ways, portfolios are still staggered after event period.
-gfc_adjust <- function(rmat,weights,K_m,date1,date2,whole_months=TRUE){
+gfc_adjust <- function(rmat,weights,K_m,date1,date2,whole_months=TRUE,
+                       overlapping_only=FALSE){
   date1 <- as.Date(date1)
   date2 <- as.Date(date2)
-  rmat <- simpleRets(rmat)
+  init_vals <- apply(rmat,2,function(x) as.numeric(na.omit(x)[1]))
   adj_list <- list()
   for (i in 1:ncol(rmat)){
     x <- na.omit(rmat[,i])
+    x <- diff(log(x))
+    x[1,] <- 0
     wi <- weights_i(weights,start_i=i,k=K_m)[[2]]
     d2i <- index(wi)[which(index(wi)>=date2)[1]]
     d1i <- GFC1
     if(whole_months){d1i <- floor_date(d1i,"months")}
-    x[index(x) >= d1i & index(x) <= d2i] <- 0
-    x <- cumprod(1+x)
+    if(!overlapping_only){
+      x[index(x) >= d1i & index(x) <= d2i] <- 0
+      x <- exp(cumsum(x))*init_vals[i]
+    }
     x[index(x) >= d1i & index(x) <= d2i] <- NA
     adj_list[[i]] <- x
   }
   adj_list <- do.call(cbind,adj_list)
   names(adj_list) <- names(rmat)
+  if(overlapping_only){
+    # Want to keep original index, but everywhere without full overlap make NA
+    tm0 <- index(adj_list)
+    tm <- index(na.trim(adj_list))
+    adj_list <- na.omit(adj_list)
+    adj_list <- cbind(adj_list,tm)
+    nas <- which(is.na(adj_list[,1]))
+    adj_list <- exp(cumsum(na.fill(adj_list,0)))
+    adj_list[nas,] <- NA
+    adj_list <- cbind(adj_list,tm0)
+  }
   return(adj_list)
 }
 
@@ -599,6 +644,11 @@ return_sim <- function(weights,K_m=6,DF_rets,
   stopCluster(mycluster)
   names(out) <- paste0("portfolio",1:K_m)
   rmat <- do.call(cbind, out) ;rm(out)
+  # Make first value in each column initial equity
+  for (i in 1:ncol(rmat)){
+    last_na <- which(!is.na(rmat[,i]))[1]-1
+    rmat[last_na,i] <- initEq
+  }
   rp <- xts(rowSums(na.trim(rmat)),order.by = index(na.trim(rmat)))
   return(list(rmat=rmat,rp=rp))
 }
@@ -632,4 +682,149 @@ remove_discordant_bruce <- function(primary_ranks,Raw,TopN){
   wts <- long-short
   names(wts) <- names(primary_ranks)
   return(wts)
+}
+
+#' Function to run factor regressions and neatly present results.
+#' Allows for panel-style or mean overlapping return analysis.
+alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
+                        method=c("Panel","Fama"),vcov_panel=plm::vcovSCC,
+                        vcov_fama=sandwich::NeweyWest,to_monthly=TRUE){
+  method = match.arg(method)
+  model = match.arg(model)
+  fmla <- switch(model, CAPM=I(rp-RF)~Mkt_RF, FF3=I(rp-RF)~Mkt_RF+HML+SMB,
+                 FF5=I(rp-RF)~Mkt_RF+HML+SMB+RMW+CMA,TS=rp~1)
+  if(method=="Panel"){
+    # Method 1 - SCC Panel
+    alpha1 <- numeric(length(panel_list))
+    p1 <- numeric(length(panel_list))
+    for (i in 1:length(panel_list)){
+      rpmat <- panel_list[[i]]
+      rp_panel <- panelise_rp(rpmat,ind_mat = factor_mat,
+                              to_monthly=to_monthly)
+      reg_model <- plm(fmla,data=rp_panel,index=c("portfolio","date"),
+                       model="pooling")
+      coefs <- as.matrix(coeftest(reg_model, vcov. = vcov_panel))
+      alpha1[i] <- round(coefs[1,1],4)
+      p1[i] <- round(coefs[1,4],4)
+    }
+  } else if(method=="Fama"){
+    alpha1 <- numeric(length(panel_list))
+    p1 <- numeric(length(panel_list))
+    for (i in 1:length(panel_list)){
+      rpmat <- zoo::na.trim(panel_list[[i]])
+      if(to_monthly){
+        out <- lapply(1:ncol(rpmat),
+                      FUN=function(x){quantmod::monthlyReturn(rpmat[,x],
+                                                              leading=FALSE)})
+        out <- do.call(cbind,out)
+        index(out) <- as.yearmon(index(out))
+        rpmat <- na.omit(out)
+      } else{
+        rpmat <- PerformanceAnalytics::Return.calculate(rpmat,"discrete")
+      }
+      tm <- index(rpmat)
+      rpmat <- data.frame(cbind(date=1,rp=rowMeans(rpmat,na.rm = FALSE)))
+      rpmat$date <- tm
+      rpmat <- merge(rpmat,factor_mat)
+      reg_model <- lm(fmla,data=rpmat)
+      coefs <- as.matrix(coeftest(reg_model, vcov.=vcov_fama))
+      alpha1[i] <- round(coefs[1,1],4)
+      p1[i] <- round(coefs[1,4],4)
+    }
+  }
+  alpha1 <- format(alpha1,scientific = FALSE)
+  alpha1[p1<0.05] <- paste0(alpha1[p1<0.05],"*")
+  alpha1[p1<0.01] <- paste0(alpha1[p1<0.01],"*")
+  alpha1[p1<0.001] <- paste0(alpha1[p1<0.001],"*")
+  p1 <- format(p1,scientific = FALSE)
+  capm_table1 <- data.frame(rbind(intercept=alpha1,paste0("(",p1,")")))
+  names(capm_table1) <- names(panel_list)
+  return(capm_table1)
+}
+
+#' Function for holding period event response from overlapping return matrix.
+#' @description Limited function for event plot from overlapping return matrix.
+#' Default shows average holding period cumulative return by month. I.e.
+#' average of all holding period equity (normalised) stacked on top of
+#' one another.
+#' If returns=TRUE, function averages holding period return each month - the
+#' result then shows the average holding period return if all portfolio
+#' holding periods were being held at the same time and equal-weighted
+#' rebalanced each month (although the stocks within each holding period) are
+#' buy-hold, or whatever the strategy implemented.
+#' Made to be used directly from strategy output.
+event_from_rmat <- function(rmat,K_m,verbose=FALSE,returns=FALSE){
+  res_list <- vector('list',ncol(rmat))
+  if(returns){
+    for (i in 1:ncol(rmat)){
+      x <- na.omit(rmat[,i])
+      #x <- to.monthly(x,indexAt = "endof")
+      #x <- x$x.Close
+      x <- na.omit(monthlyReturn(x,leading = FALSE))
+      res_mat <- data.frame(matrix(nrow=ceiling(nrow(x)/K_m),ncol=(K_m+2)))
+      names(res_mat) <- c("date",paste0("m",0:K_m))
+      res_mat$m0 <- 0
+      for (j in 1:ceiling(nrow(x)/K_m)){
+        rpsub <- x[(K_m*j-K_m+1):min((K_m*j),nrow(x))]
+        res_mat$date[j] <- as.Date(index(rpsub)[1])
+        res_mat[j,paste0("m",1:nrow(rpsub))] <- as.numeric(as.numeric(rpsub))
+      }
+      res_list[[i]] <- res_mat
+    }
+    res_list <- do.call(rbind,res_list)
+    if(verbose){
+      return(res_list)
+    }
+    return(colMeans(res_list[,-1],na.rm = TRUE))
+  } else{
+    for (i in 1:ncol(rmat)){
+      x <- rmat[,i]
+      x <- na.omit(x)
+      x <- to.monthly(x,indexAt = "endof")
+      x <- x$x.Close
+      res_mat <- data.frame(matrix(nrow=ceiling(nrow(x)/K_m),ncol =(K_m+2)))
+      names(res_mat) <- c("date",paste0("m",0:K_m))
+      for (j in 1:ceiling(nrow(x)/K_m)){
+        rpsub <- x[(K_m*j+1-K_m):min(((K_m*j+1)),nrow(x))]
+        rpsub <- rpsub/as.numeric(rpsub[1,1])
+        res_mat$date[j] <- as.Date(index(rpsub)[1])
+        res_mat[j,paste0("m",0:(nrow(rpsub)-1))] <- as.numeric(as.numeric(rpsub))
+      }
+      res_list[[i]] <- res_mat
+    }
+    res_list <- do.call(rbind,res_list)
+    if(verbose){
+      return(res_list)
+    }
+    return(colMeans(res_list[,-1],na.rm = TRUE)-1)
+  }
+}
+
+#' Thompson (2011) Estimator for two-way clustering plus spatial correlation.
+vcovThompson <- function(x, maxlag = NULL, ...) {
+  w1 <- function(j, maxlag) 1
+  VsccL.1 <- vcovSCC(x, maxlag = maxlag, wj = w1, ...)
+  Vcx <- vcovHC(x, cluster = "group", method = "arellano", ...)
+  VnwL.1 <- vcovSCC(x, maxlag = maxlag, inner = "white", wj = w1, ...)
+  return(VsccL.1 + Vcx - VnwL.1)
+}
+
+#' High-level sandwhich::kweights wrapper to pass to plm.
+kern_weights <- function(j, maxlag=NULL,
+                         kern=c("Bartlett","Truncated","Parzen",
+                                "Tukey-Hanning","Quadratic Spectral")){
+  kern=match.arg(kern)
+  if(kern=="Bartlett"){
+    return(max((1-j/(maxlag+1)),0))
+  }
+  b = j/maxlag
+  return(sandwich::kweights(b,kern))
+}
+
+#' High-level plm::vcovSCC wrapper for Driscoll and Kraay's SCC estimator.
+#' Allows easier specification of kernel smoother.
+vcovDK <- function(x,maxlag=NULL,kern){
+  maxlag <- ifelse(is.null(maxlag),ceiling((max(pdim(x)$Tint$Ti))^(1/4)),maxlag)
+  plm::vcovSCC(x, maxlag=maxlag,
+               wj=function(j,maxlag){kern_weights(j,maxlag,kern)})
 }
