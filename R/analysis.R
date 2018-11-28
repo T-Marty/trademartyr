@@ -350,7 +350,7 @@ event_response_bh <- function(weights,df_rets,horizon,on="months",stop_loss=NULL
     }
     lsm <- wts_sum_l*lm+wts_sum_s*sm
     if(!is.null(stop_loss)){
-      if(min(lsm)<=-1*stop_loss){
+      if(min(lsm) <=- 1*stop_loss) {
         wls <- which(lsm <= -1*stop_loss)[1]
         hold_ret_ls <- lsm[wls]
         lsm[(wls+1):length(lsm)] <- NA
@@ -358,8 +358,12 @@ event_response_bh <- function(weights,df_rets,horizon,on="months",stop_loss=NULL
         lm[(wls+1):length(lm)] <- NA
         hold_ret_l <- (tail(na.omit(lm),1)-1)*wts_sum_l
         hold_ret_s <- (tail(na.omit(sm),1)+1)*wts_sum_s
+      } else {
+        hold_ret_l <- (tail(lm,1)-1)*wts_sum_l
+        hold_ret_s <- (tail(sm,1)+1)*wts_sum_s
+        hold_ret_ls <- tail(lsm,1)
       }
-    } else{
+    } else {
       hold_ret_l <- (tail(lm,1)-1)*wts_sum_l
       hold_ret_s <- (tail(sm,1)+1)*wts_sum_s
       hold_ret_ls <- tail(lsm,1)
