@@ -740,27 +740,23 @@ news_days <- function(dn, n=1, on="months", ind=NULL, from_first=TRUE,
                       items=FALSE){
   if(!is.null(ind)){dn <- cbind(dn,ind); dn <- dn[ind]}
   eps <- xts::endpoints(dn, on=on)
-  if (from_first) {eps[1] <- 1} else { eps <- eps[2:length(eps)]}
+  if (from_first){eps[1] <- 1} else { eps <- eps[-1]}
   nmat <- as.data.frame(matrix(0,ncol=ncol(dn),nrow=length(eps)))
   nmat <- as.xts(nmat,order.by = index(dn)[eps])
   colnames(nmat) <- colnames(dn)
+  eps[1] <- eps[1]-1
   if(items==FALSE){
     for (i in 1:(length(eps)-n)){
-      news_subset <- dn[eps[i]:eps[i+n],]
+      news_subset <- dn[(eps[i]+1):eps[i+n],]
       for (j in 1:ncol(dn)){
-        ns <- news_subset[,j]
-        n_days <- sum(!is.na(ns))
-        nmat[index(dn)[eps[i+n]],j] <- n_days
+        nmat[index(dn)[eps[i+n]],j] <- sum(!is.na(news_subset[,j]))
       }
     }
   } else{
     for (i in 1:(length(eps)-n)){
-      news_subset <- dn[eps[i]:eps[i+n],]
+      news_subset <- dn[(eps[i]+1):eps[i+n],]
       for (j in 1:ncol(dn)){
-        ns <- news_subset[,j]
-        ns[is.na(ns),1]<-0
-        n_items <- sum(ns)
-        nmat[index(dn)[eps[i+n]],j] <- n_items
+        nmat[index(dn)[eps[i+n]],j] <- sum(news_subset[,j],na.rm = TRUE)
       }
     }
   }

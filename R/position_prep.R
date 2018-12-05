@@ -361,6 +361,8 @@ multi_rank <- function(Vars, groupings){
   # Example: ranks3 <- momRankMembers(DF,n=3);ranks6 <- momRankMembers(DF,n=6)
   # out <- multiRank(Vars=list(mom_6m=ranks_6m,mom_3m=ranks_3m), groupings = c(5,2))
   # out[[2]] is xts of
+  # Note: might be easier to use quantiles: e.g.
+  # group <- cut(k,quantile(k,seq(0,1,1/(num_groups))),labels = 1:num_groups,include.lowest = T)
   M_list <- list()
   for (i in 1:length(groupings)){
     df <- as.matrix(Vars[[i]])
