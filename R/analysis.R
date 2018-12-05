@@ -1,6 +1,6 @@
 #' Function to form panel data from a portfolio equity matrix. A precursor
 #' to performing robust regression between portfolio legs.
-panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
+panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE, leading=FALSE){
   if(is.null(names(rpmat))){names(rpmat) <- paste(1:ncol(rpmat))}
   if(!is.null(ind_mat)){
     inames <- names(ind_mat)
@@ -17,7 +17,7 @@ panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
   for (i in 1:ncol(rpmat)){
     x <- zoo::na.trim(rpmat[,i])
     if(to_monthly){
-      x <- quantmod::monthlyReturn(x,leading=FALSE)
+      x <- quantmod::monthlyReturn(x,leading=leading)
       index(x) <- as.yearmon(index(x))
     } else{
       x <- PerformanceAnalytics::Return.calculate(x,method = "discrete")
@@ -67,7 +67,7 @@ load_fama_french <- function(ffdir,as_df=TRUE,freq="monthly"){
 #' portfolio in a double-sorted portfolio formation procedure. The returns
 #' to a long-short portfolio of the most extreme second layer quantiles within
 #' each first-layer quantile is also provided.
-cross_quantile_table <- function(Vars,groupings,K_m,hhll=FALSE,
+cross_quantile_table <- function(Vars,groupings,K_m,hhll=FALSE,DF_rets,
                                  verbose=TRUE,remove_period=FALSE,date1=NULL,
                                  date2=NULL,whole_months=TRUE){
   # Get groupings/ranks
@@ -155,7 +155,7 @@ cross_quantile_table <- function(Vars,groupings,K_m,hhll=FALSE,
 
 #' Function to calculate and tabulate the mean *equity* return for every quantile
 #' portfolio in a single-sorted portfolio procedure.
-inter_quantile_table_eq <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
+inter_quantile_table_eq <- function(Vars,groupings,DF_rets,to_monthly=TRUE,diff=TRUE,
                                  verbose=FALSE){
   # Get groupings/ranks
   ranks <- multi_rank(Vars=Vars, groupings = groupings)
