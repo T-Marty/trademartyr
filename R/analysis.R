@@ -684,7 +684,8 @@ remove_discordant_bruce <- function(primary_ranks,Raw,TopN){
 #' Allows for panel-style or mean overlapping return analysis.
 alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
                         method=c("Panel","Fama"),vcov_panel=plm::vcovSCC,
-                        vcov_fama=sandwich::NeweyWest,to_monthly=TRUE){
+                        vcov_fama=sandwich::NeweyWest,to_monthly=TRUE,
+                        leading=FALSE){
   method = match.arg(method)
   model = match.arg(model)
   fmla <- switch(model, CAPM=I(rp-RF)~Mkt_RF, FF3=I(rp-RF)~Mkt_RF+HML+SMB,
@@ -696,7 +697,7 @@ alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
     for (i in 1:length(panel_list)){
       rpmat <- panel_list[[i]]
       rp_panel <- panelise_rp(rpmat,ind_mat = factor_mat,
-                              to_monthly=to_monthly)
+                              to_monthly=to_monthly,leading=leading)
       reg_model <- plm(fmla,data=rp_panel,index=c("portfolio","date"),
                        model="pooling")
       coefs <- as.matrix(coeftest(reg_model, vcov. = vcov_panel))
@@ -711,7 +712,7 @@ alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
       if(to_monthly){
         out <- lapply(1:ncol(rpmat),
                       FUN=function(x){quantmod::monthlyReturn(rpmat[,x],
-                                                              leading=FALSE)})
+                                                              leading=leading)})
         out <- do.call(cbind,out)
         index(out) <- as.yearmon(index(out))
         rpmat <- na.omit(out)
@@ -749,14 +750,15 @@ alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
 #' rebalanced each month (although the stocks within each holding period) are
 #' buy-hold, or whatever the strategy implemented.
 #' Made to be used directly from strategy output.
-event_from_rmat <- function(rmat,K_m,verbose=FALSE,returns=FALSE){
+event_from_rmat <- function(rmat,K_m,verbose=FALSE,returns=FALSE,
+                            index_at="endof",leading=FALSE){
   res_list <- vector('list',ncol(rmat))
   if(returns){
     for (i in 1:ncol(rmat)){
       x <- na.omit(rmat[,i])
       #x <- to.monthly(x,indexAt = "endof")
       #x <- x$x.Close
-      x <- na.omit(monthlyReturn(x,leading = FALSE))
+      x <- na.omit(quantmod::monthlyReturn(x,leading = leading))
       res_mat <- data.frame(matrix(nrow=ceiling(nrow(x)/K_m),ncol=(K_m+2)))
       names(res_mat) <- c("date",paste0("m",0:K_m))
       res_mat$m0 <- 0
@@ -776,7 +778,7 @@ event_from_rmat <- function(rmat,K_m,verbose=FALSE,returns=FALSE){
     for (i in 1:ncol(rmat)){
       x <- rmat[,i]
       x <- na.omit(x)
-      x <- to.monthly(x,indexAt = "endof")
+      x <- xts::to.monthly(x,indexAt = index_at)
       x <- x$x.Close
       res_mat <- data.frame(matrix(nrow=ceiling(nrow(x)/K_m),ncol =(K_m+2)))
       names(res_mat) <- c("date",paste0("m",0:K_m))
