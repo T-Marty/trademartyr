@@ -592,7 +592,7 @@ remove_discordant <- function(weights,Raw){
 #' in that sorting is not conducted consecutively. Rather, the ranks of an
 #' asset with respect to each variable are multiplied together.
 #' Removes assets with discordant information if Raw !=null.
-multi_rank_no_order <- function(Vars,Raw,long_only=FALSE){
+multi_rank_no_order_deprecated <- function(Vars,Raw,long_only=FALSE, TopN){
   # Note: Zero used to identify non-investable assets
   r <- Vars[[1]]
   for (i in 2:length(Vars)){
@@ -625,6 +625,28 @@ multi_rank_no_order <- function(Vars,Raw,long_only=FALSE){
   names(wts) <- names(Vars[[1]])
   return(wts)
 }
+
+#' Function which combines individual ranks simultaneosly, as opposed to
+#' sequentially as in multi_rank.
+# Like multi_rank, it is assumed ranks already account for missing data or
+#' non-membership with zeros.
+multi_rank_no_order <- function(rank_list, type = c("dist","sum","prod")){
+  type = match.arg(type)
+  if (type=="sum"){
+    r <- do.call("+",rank_list)
+  } else if (type=="prod"){
+    r <- do.call("*",rank_list)
+  } else {
+    r <- sqrt(do.call("+",lapply(rank_list,function(x) x^2)))
+  }
+  r <- r*do.call("*",lapply(rank_list,function(x) x != 0))
+  for (i in 1:nrow(r)){
+    if(sum(r[i,]!=0)==0){next()}
+    r[i,r[i,]!=0] <- rank(as.numeric(r[i,r[i,]!=0]),ties.method="first")
+  }
+  return(r)
+}
+
 
 #' Function to parallelize return-based simulation over each leg.
 return_sim <- function(weights,K_m=6,DF_rets,
@@ -825,4 +847,71 @@ vcovDK <- function(x,maxlag=NULL,kern){
   maxlag <- ifelse(is.null(maxlag),ceiling((max(pdim(x)$Tint$Ti))^(1/4)),maxlag)
   plm::vcovSCC(x, maxlag=maxlag,
                wj=function(j,maxlag){kern_weights(j,maxlag,kern)})
+}
+
+#' Function to lead xts objects.
+#' Example for calculating forward return:
+#' fwd_6 <- lead_xts(x,6)/x -1
+lead_xts <- function(df,n){
+  df <- as.data.frame(df)
+  df <- xts(apply(df,2,dplyr::lead,n=n),as.POSIXct(rownames(df)))
+}
+
+#' Function for applying alpha function to subperiods and tabulating.
+#' @param rps List of prices (portfolios) to analyse.
+#' @param periods List of periods in YYYYmmdd string format,
+#' e.g. "20030128::20040101". Use '-' to exclude periods, e.g.
+#' "-20030128::20040101".
+#' @param func Function to get mean return or alpha, e.g. alpha_table(...)
+#' @param str_fun Function to apply to each table. Useful for keeping or removing
+#' t-stats or p-vals.
+#' @details Example:
+#' p1 <- "20030101::20080914"
+#' p2 <- "-20080915::20090930"
+#' p3 <- "20091001::20171231"
+#' periods <- list(p1,p2,p3)
+#' rps <- mom_deciles$portfolios[c(1,10,11)]
+#' names(rps) <- c("High Mom","Low Mom","HML Mom")
+#' func <- function(x) {t(alpha_table(x,model = "TS",method="Panel", factor_mat=ff3,
+#'                                    vcov_panel=vcov_panel,leading=TRUE))}
+#' str_func1 <- function(x) {gsub(" .*", "", x)} # remove text after space
+#' str_func2 <- function(x) {gsub(".* ", "", x)} # remove text before space
+#' spts <- sub_period_alphas(lapply(rps,na.omit),periods,func= function(x)
+#' {t(mean_return_table(x,leading = TRUE))},str_func = str_func1)
+#' spts <- cbind(rep(c("Pre-GFC","Ex-GFC","Post-GFC"),each=2),spts)
+sub_period_alphas <- function(rps,periods,func,str_func=NULL){
+  if(is.null(names(rps))){
+    nms <- paste0("P",1:length(rps))
+  } else {
+    nms <- names(rps)
+  }
+  rp_list <- vector('list',length(rps))
+  # Create dfs for each sub-period
+  for (j in 1:length(rps)){
+    rmat <- rps[[j]]
+    sub_list <- vector('list',length(periods))
+    for(i in 1:length(periods)){
+      if(substr(periods[i],1,1)=="-"){
+        pd <- lapply(strsplit(gsub("-","",periods[i]),"::"),lubridate::ymd)
+        sub_list[[i]] <- rmat[index(rmat)<pd[[1]][1] | index(rmat)>pd[[1]][2],]
+      } else {
+        sub_list[[i]] <- rmat[periods[[i]]]
+      }
+    }
+    rp_list[[j]] <- sub_list
+  }
+  # Perform regressions/get alpha
+  mrt <- lapply(rp_list,func)
+  mrt <- do.call(cbind,mrt)
+  if(!is.null(str_func)){
+    mrt <- apply(mrt,2,str_func)
+  }
+  resmat <- matrix("",nrow=length(periods)*2,ncol=length(rps))
+  resmat[which(1:nrow(resmat)%%2==1),] <- mrt[,which(1:ncol(mrt)%%2==1)]
+  resmat[which(1:nrow(resmat)%%2==0),] <- mrt[,which(1:ncol(mrt)%%2==0)]
+  colnames(resmat) <- nms
+  #rn <- lapply(periods,
+  #             function(x) paste0(ymd(unlist(strsplit(x,"::"))),collapse="/\n"))
+  #resmat <-cbind(rep(unlist(rn),each=2),resmat)
+  return(resmat)
 }
