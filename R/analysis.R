@@ -15,11 +15,12 @@ panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE, leading=FALSE){
   }
   rp_list <- list()
   for (i in 1:ncol(rpmat)){
-    x <- zoo::na.trim(rpmat[,i])
+    x <- rpmat[,i]
     if(to_monthly){
-      x <- quantmod::monthlyReturn(x,leading=leading)
+      x <- period_return(x,leading=leading)
       index(x) <- as.yearmon(index(x))
     } else{
+      x <- zoo::na.trim(x)
       x <- PerformanceAnalytics::Return.calculate(x,method = "discrete")
     }
     names(x) <- "rp"
@@ -502,10 +503,7 @@ append_group <- function(pmat,Vars,groupings,Id="ticker"){
 
 #' Function to get different types of mean return from portfolio return object.
 mean_return <- function(rpmat,overlapping=TRUE,leading=FALSE){
-  rp <- lapply(1:ncol(rpmat),
-               FUN=function(x) quantmod::monthlyReturn(na.omit(rpmat[,x]),
-                                                       leading=leading))
-  rp <- do.call(cbind,rp)
+  rp <- period_return(rpmat, leading = leading)
   if (overlapping){
     rp <- na.omit(rp)
     ts_mean <- rowMeans(rp)
@@ -650,7 +648,8 @@ multi_rank_no_order <- function(rank_list, type = c("dist","sum","prod")){
 
 #' Function to parallelize return-based simulation over each leg.
 return_sim <- function(weights,K_m=6,DF_rets,
-                       stop_loss=0.9,holding_time=FALSE, initEq=1){
+                       stop_loss=0.9,holding_time=FALSE, initEq=1,
+                       add_initEq=FALSE){
   cores <- detectCores()
   mycluster <- makeCluster(cores-1,type = "FORK")
   registerDoParallel(mycluster)
@@ -663,9 +662,11 @@ return_sim <- function(weights,K_m=6,DF_rets,
   names(out) <- paste0("portfolio",1:K_m)
   rmat <- do.call(cbind, out) ;rm(out)
   # Make first value in each column initial equity
-  for (i in 1:ncol(rmat)){
-    last_na <- which(!is.na(rmat[,i]))[1]-1
-    rmat[last_na,i] <- initEq
+  if(add_initEq){
+    for (i in 1:ncol(rmat)){
+      last_na <- which(!is.na(rmat[,i]))[1]-1
+      rmat[last_na,i] <- initEq
+    }
   }
   rp <- xts(rowSums(na.trim(rmat)),order.by = index(na.trim(rmat)))
   return(list(rmat=rmat,rp=rp))
@@ -732,10 +733,7 @@ alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
     for (i in 1:length(panel_list)){
       rpmat <- zoo::na.trim(panel_list[[i]])
       if(to_monthly){
-        out <- lapply(1:ncol(rpmat),
-                      FUN=function(x){quantmod::monthlyReturn(rpmat[,x],
-                                                              leading=leading)})
-        out <- do.call(cbind,out)
+        out <- period_return(rpmat,leading = leading)
         index(out) <- as.yearmon(index(out))
         rpmat <- na.omit(out)
       } else{
@@ -893,7 +891,9 @@ sub_period_alphas <- function(rps,periods,func,str_func=NULL){
     for(i in 1:length(periods)){
       if(substr(periods[i],1,1)=="-"){
         pd <- lapply(strsplit(gsub("-","",periods[i]),"::"),lubridate::ymd)
-        sub_list[[i]] <- rmat[index(rmat)<pd[[1]][1] | index(rmat)>pd[[1]][2],]
+        rp_na <- rmat
+        rp_na[index(rp_na)>=pd[[1]][1] & index(rp_na)<=pd[[1]][2],] <- NA
+        sub_list[[i]] <- rp_na
       } else {
         sub_list[[i]] <- rmat[periods[[i]]]
       }
@@ -914,4 +914,30 @@ sub_period_alphas <- function(rps,periods,func,str_func=NULL){
   #             function(x) paste0(ymd(unlist(strsplit(x,"::"))),collapse="/\n"))
   #resmat <-cbind(rep(unlist(rn),each=2),resmat)
   return(resmat)
+}
+
+#' Wrapper for quantmod::periodReturn that handles NAs appropriately.
+#' quantmod::periodReturn will use last non-NA price, regardless of how long
+#' the price occurred. Thus, following long periods of missing data, the
+#' magnitude of period return will be extremely large.
+#' Note: This function will behave the same as quantmod::periodReturn if
+#' index is missing. I.e. missing periods should be populated with NAs.
+period_return <- function(x,period="monthly",type="arithmetic",leading=FALSE){
+  r_list <- vector('list',ncol(x))
+  for (i in 1:ncol(x)){
+    y <- zoo::na.trim(x[,i])
+    if(sum(is.na(y))>0){
+      na_first <- min(which(is.na(y)))-1
+      na_last <- max(which(is.na(y)))+1
+      y1 <- quantmod::periodReturn(y[1:na_first,],
+                                   period=period,type=type,leading=leading)
+      y2 <- quantmod::periodReturn(y[na_last:nrow(y),],
+                                   period=period,type=type,leading=leading)
+      r_list[[i]] <- rbind(y1,y2)
+    } else{
+      r_list[[i]] <- quantmod::periodReturn(y,period=period,type=type,
+                                            leading=leading)
+    }
+  }
+  return(do.call(cbind,r_list))
 }
