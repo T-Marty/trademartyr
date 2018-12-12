@@ -387,6 +387,10 @@ event_response_bh <- function(weights,df_rets,horizon,on="months",stop_loss=NULL
         lm[(wls+1):length(lm)] <- NA
         hold_ret_l <- (tail(na.omit(lm),1)-1)*wts_sum_l
         hold_ret_s <- (tail(na.omit(sm),1)+1)*wts_sum_s
+      } else{
+        hold_ret_l <- (tail(lm,1)-1)*wts_sum_l
+        hold_ret_s <- (tail(sm,1)+1)*wts_sum_s
+        hold_ret_ls <- tail(lsm,1)
       }
     } else{
       hold_ret_l <- (tail(lm,1)-1)*wts_sum_l
@@ -629,19 +633,27 @@ multi_rank_no_order_deprecated <- function(Vars,Raw,long_only=FALSE, TopN){
 # Like multi_rank, it is assumed ranks already account for missing data or
 #' non-membership with zeros.
 multi_rank_no_order <- function(rank_list, type = c("dist","sum","prod")){
+  nms <- names(rank_list[[1]])
+  # Merge on dates
+  ind <- sort(unique(do.call("c",lapply(rank_list,
+                                        function(x) as.Date(zoo::index(x))))))
+  rank_list <- lapply(rank_list, function(x) cbind(x,ind))
+  # Rank
   type = match.arg(type)
   if (type=="sum"){
-    r <- do.call("+",rank_list)
+    r <- Reduce("+",rank_list)
   } else if (type=="prod"){
-    r <- do.call("*",rank_list)
+    r <- Reduce("*",rank_list)
   } else {
-    r <- sqrt(do.call("+",lapply(rank_list,function(x) x^2)))
+    r <- sqrt(Reduce("+",lapply(rank_list,function(x) x^2)))
   }
-  r <- r*do.call("*",lapply(rank_list,function(x) x != 0))
+  r <- r*Reduce("*",lapply(rank_list,function(x) x != 0))
+  r <- na.fill(r,0)
   for (i in 1:nrow(r)){
     if(sum(r[i,]!=0)==0){next()}
     r[i,r[i,]!=0] <- rank(as.numeric(r[i,r[i,]!=0]),ties.method="first")
   }
+  names(r) <- nms
   return(r)
 }
 
