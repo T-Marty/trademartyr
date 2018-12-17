@@ -720,15 +720,17 @@ remove_discordant_bruce <- function(primary_ranks,Raw,TopN){
 alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
                         method=c("Panel","Fama"),vcov_panel=plm::vcovSCC,
                         vcov_fama=sandwich::NeweyWest,to_monthly=TRUE,
-                        leading=FALSE){
+                        leading=FALSE,stat=c("tval","pval","both")){
   method = match.arg(method)
   model = match.arg(model)
+  stat = match.arg(stat)
   fmla <- switch(model, CAPM=I(rp-RF)~Mkt_RF, FF3=I(rp-RF)~Mkt_RF+HML+SMB,
                  FF5=I(rp-RF)~Mkt_RF+HML+SMB+RMW+CMA,TS=rp~1)
   if(method=="Panel"){
     # Method 1 - SCC Panel
     alpha1 <- numeric(length(panel_list))
     p1 <- numeric(length(panel_list))
+    t1 <- numeric(length(panel_list))
     for (i in 1:length(panel_list)){
       rpmat <- panel_list[[i]]
       rp_panel <- panelise_rp(rpmat,ind_mat = factor_mat,
@@ -736,12 +738,14 @@ alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
       reg_model <- plm(fmla,data=rp_panel,index=c("portfolio","date"),
                        model="pooling")
       coefs <- as.matrix(coeftest(reg_model, vcov. = vcov_panel))
-      alpha1[i] <- round(coefs[1,1],4)
+      alpha1[i] <- sprintf("%.4f",coefs[1,1])
       p1[i] <- round(coefs[1,4],4)
+      t1[i] <- round(coefs[1,3],4)
     }
   } else if(method=="Fama"){
     alpha1 <- numeric(length(panel_list))
     p1 <- numeric(length(panel_list))
+    t1 <- numeric(length(panel_list))
     for (i in 1:length(panel_list)){
       rpmat <- zoo::na.trim(panel_list[[i]])
       if(to_monthly){
@@ -757,16 +761,23 @@ alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
       rpmat <- merge(rpmat,factor_mat)
       reg_model <- lm(fmla,data=rpmat)
       coefs <- as.matrix(coeftest(reg_model, vcov.=vcov_fama))
-      alpha1[i] <- round(coefs[1,1],4)
+      alpha1[i] <- sprintf("%.4f",coefs[1,1])
       p1[i] <- round(coefs[1,4],4)
+      t1[i] <- round(coefs[1,3],4)
     }
   }
   alpha1 <- format(alpha1,scientific = FALSE)
   alpha1[p1<0.05] <- paste0(alpha1[p1<0.05],"*")
   alpha1[p1<0.01] <- paste0(alpha1[p1<0.01],"*")
   alpha1[p1<0.001] <- paste0(alpha1[p1<0.001],"*")
-  p1 <- format(p1,scientific = FALSE)
-  capm_table1 <- data.frame(rbind(intercept=alpha1,paste0("(",p1,")")))
+  p1 <- sprintf("%.4f",p1)
+  t1 <- sprintf("%.4f",t1)
+  stat1 <- switch(stat,pval=paste0("(",p1,")"),tval=paste0("(",t1,")"),
+                  both=paste0(p1," (",t1,")"))
+  statname <- switch(stat,pval="(p-val)",tval="(t-stat)",
+                     both="p-val (t-stat)")
+  capm_table1 <- data.frame(rbind(alpha1,stat1))
+  rownames(capm_table1) <- c("Intercept", statname)
   names(capm_table1) <- names(panel_list)
   return(capm_table1)
 }
@@ -865,6 +876,39 @@ vcovDK <- function(x,maxlag=NULL,kern){
 lead_xts <- function(df,n){
   df <- as.data.frame(df)
   df <- xts(apply(df,2,dplyr::lead,n=n),as.POSIXct(rownames(df)))
+}
+
+# Function for calculating forward or backward return over n periods for specified
+# periodicity. Handles rather than removes NAs, unlike quantmod::periodReturn.
+# Uses last available observation each period.
+n_period_return <- function(df,n=1,on="months",forward=FALSE,ind=NULL,
+                            leading=FALSE,type=c("discrete","continuous")){
+  if(is.null(ind)){
+    ind <- index(df)
+  }
+  eps <- endpoints(df,on=on)[-1]
+  sps <- c(1, eps[-length(eps)]+1)
+  out <- vector('list',ncol(df))
+  for(i in 1:ncol(df)){
+    x <- df[,i]
+    k <- numeric(length(eps))
+    for(j in 1:length(eps)){
+     p <- c(NA,na.omit(x[sps[j]:eps[j]]))
+     k[j] <- p[length(p)]
+    }
+    out[[i]] <- k
+  }
+  out <- xts(Reduce(cbind,out),ind[endpoints(ind,on=on)[-1]])
+  names(out) <- names(df)
+  if(leading){
+    out <- rbind(df[ind[1],],out)
+  }
+  type <- match.arg(type)
+  out <- switch(type, discrete = out/lag(out,n)-1, continuous = diff(log(out)))
+  if(forward){
+    out <- lead_xts(out, n)
+  }
+  return(out)
 }
 
 #' Function for applying alpha function to subperiods and tabulating.
