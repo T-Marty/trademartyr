@@ -823,16 +823,18 @@ median_adjust_deprecated <- function(ns,hist_members=newHM){
 #' Note: this function relies on hist_members containing NAs
 #' to represent non-membership (as output by Bloomberg wrappers)
 #' Note also that news data for all non-members will be zero.
-median_adjust <- function(ns,hist_members=newHM,func=median){
+median_adjust <- function(ns,hist_members=newHM,func=median,zero_fill=TRUE){
   # need to recall which rows have no data
   no_data <- apply(ns,1,function(x) sum(is.na(x))) == ncol(ns)
   hist_members <- hist_members[index(ns),names(ns)]
   ns <- ns*hist_members # This makes non-member news data NA
   ns <- ns-apply(ns,1,func,na.rm=TRUE)
-  # Fill all NAs with zeros, but make non-members NA again, since they were not
-  # median-adjusted and their zero-values will be meaningless.
-  ns <- zoo::na.fill(ns,0)*hist_members
-  # also make rows with no data NA again
+  if(zero_fill){
+    # Fill all NAs with zeros, but make non-members NA again, since they were not
+    # median-adjusted and their zero-values will be meaningless.
+    ns <- zoo::na.fill(ns,0)*hist_members
+    # also make rows with no data NA again
+  }
   ns[no_data,] <- NA
   return(ns)
 }
@@ -913,6 +915,7 @@ rp_cum_rets <-  function(wts,df_rets,stop_loss=NULL){
 #' the number of shares doubles, would be 0.5.
 #' This is the form returned by quantmod::getSplits().
 ca_adjust <- function(x, splits){
+  x <- x[!duplicated(index(x)),]
   ind <- index(x)
   x <- na.omit(x)
   d <- cbind(x,splits)[paste0(range(index(x)),collapse = "::")]
@@ -926,6 +929,7 @@ ca_adjust <- function(x, splits){
 
 #' Function for adjusting prices for dividends
 div_adjust <- function(x, divs){
+  x <- x[!duplicated(index(x)),]
   # remove duplicate dividends (if you want summed, should be added elsewhere)
   is_duplicated <- duplicated(cbind(index(divs),as.numeric(divs)))
   divs <- divs[!is_duplicated,]
@@ -944,10 +948,16 @@ div_adjust <- function(x, divs){
 }
 
 #' Function for adjusting prices for splits and dividends
-adjust_prices <- function(x, divs=NULL, splits=NULL){
+#' cch are splits that need to be used to adjust dividends
+#' if splits are provided by cch is null, all splits will be used to adjust
+#' dividends.
+#' Approach is: adjust dividends, adjust prices for splits, adjust
+#' split-adjusted prices for dividends using adjusted dividends.
+adjust_prices <- function(x, divs=NULL, splits=NULL, cch=NULL){
   if(!is.null(splits)){
     if(!is.null(divs)){
-      td_a <- ca_adjust(divs, splits = splits)
+      if(is.null(cch)){cch <- splits}
+      td_a <- ca_adjust(divs, splits = cch)
       tp_a <- ca_adjust(x, splits = splits)
       tp_a <- div_adjust(tp_a, divs = td_a)
     } else {
@@ -962,9 +972,10 @@ adjust_prices <- function(x, divs=NULL, splits=NULL){
 #' Function for converting xts to data.frames with time index
 #' for the purpose of saving to file.
 xts_to_df <- function(x, datecol="date"){
+  nm <- names(x)
   tm <- index(x)
   x <- data.frame(x)
-  nm <- names(x)
+  names(x) <- nm
   x$date <- tm
   x <- x[,c("date",nm)]
   row.names(x) <- NULL
