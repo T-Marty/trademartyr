@@ -197,7 +197,7 @@ inter_quantile_table_eq <- function(Vars,groupings,DF_rets,to_monthly=TRUE,diff=
   if(to_monthly){
     rp_list <- lapply(rp_list,
                       function(x) quantmod::monthlyReturn(na.omit(x),
-                                                          leading=FALSE))
+                                                          leading=TRUE))
   }
   rp_list <- do.call(cbind,rp_list)
   names(rp_list) <- names(weight_list)
@@ -332,7 +332,7 @@ mean_return_table <- function(rps,verbose=FALSE,sig=4,leading=FALSE){
     colnames(num) <- c("mean","t-stat","p-val")
     return(list(res_mat=data.frame(tab),num=num))
   }
-  return(as.data.frame(tab))
+  return(data.frame(tab,stringsAsFactors = FALSE))
 }
 
 # Function to get the mean buy-and-hold (portfolio) response to an event,
@@ -717,7 +717,8 @@ remove_discordant_bruce <- function(primary_ranks,Raw,TopN){
 
 #' Function to run factor regressions and neatly present results.
 #' Allows for panel-style or mean overlapping return analysis.
-alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
+alpha_table <- function(panel_list,factor_mat,
+                        model=c("TS","TSX","CAPM","FF3","FF5"),
                         method=c("Panel","Fama"),vcov_panel=plm::vcovSCC,
                         vcov_fama=sandwich::NeweyWest,to_monthly=TRUE,
                         leading=FALSE,stat=c("tval","pval","both")){
@@ -725,7 +726,7 @@ alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
   model = match.arg(model)
   stat = match.arg(stat)
   fmla <- switch(model, CAPM=I(rp-RF)~Mkt_RF, FF3=I(rp-RF)~Mkt_RF+HML+SMB,
-                 FF5=I(rp-RF)~Mkt_RF+HML+SMB+RMW+CMA,TS=rp~1)
+                 FF5=I(rp-RF)~Mkt_RF+HML+SMB+RMW+CMA,TS=rp~1,TSX=I(rp-RF)~1)
   if(method=="Panel"){
     # Method 1 - SCC Panel
     alpha1 <- numeric(length(panel_list))
@@ -747,13 +748,14 @@ alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
     p1 <- numeric(length(panel_list))
     t1 <- numeric(length(panel_list))
     for (i in 1:length(panel_list)){
-      rpmat <- zoo::na.trim(panel_list[[i]])
+      rpmat <- panel_list[[i]]
       if(to_monthly){
         out <- period_return(rpmat,leading = leading)
         index(out) <- as.yearmon(index(out))
         rpmat <- na.omit(out)
       } else{
         rpmat <- PerformanceAnalytics::Return.calculate(rpmat,"discrete")
+        rpmat <- na.omit(rpmat)
       }
       tm <- index(rpmat)
       rpmat <- data.frame(cbind(date=1,rp=rowMeans(rpmat,na.rm = FALSE)))
@@ -766,7 +768,6 @@ alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
       t1[i] <- round(coefs[1,3],4)
     }
   }
-  alpha1 <- format(alpha1,scientific = FALSE)
   alpha1[p1<0.05] <- paste0(alpha1[p1<0.05],"*")
   alpha1[p1<0.01] <- paste0(alpha1[p1<0.01],"*")
   alpha1[p1<0.001] <- paste0(alpha1[p1<0.001],"*")
@@ -776,7 +777,7 @@ alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
                   both=paste0(p1," (",t1,")"))
   statname <- switch(stat,pval="(p-val)",tval="(t-stat)",
                      both="p-val (t-stat)")
-  capm_table1 <- data.frame(rbind(alpha1,stat1))
+  capm_table1 <- data.frame(rbind(alpha1,stat1),stringsAsFactors = FALSE)
   rownames(capm_table1) <- c("Intercept", statname)
   names(capm_table1) <- names(panel_list)
   return(capm_table1)
