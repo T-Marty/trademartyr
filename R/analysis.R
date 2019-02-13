@@ -998,3 +998,12 @@ period_return <- function(x,period="monthly",type="arithmetic",leading=FALSE){
   }
   return(do.call(cbind,r_list))
 }
+
+#' Helper function to add significance marks to coefficients, given a
+#' vector of coefficients, a vector p values, and vector significance cut-offs.
+signif_stars <- function(a,p,sigs = c(0.05,0.01,0.001)){
+  for (i in 1:length(sigs)){
+    a[p < sigs[i]] <- paste0(a[p <sigs[i]],"*")
+  }
+  return(a)
+}

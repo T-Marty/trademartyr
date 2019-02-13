@@ -609,6 +609,9 @@ daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
   dn$date <- tm
   row.names(dn)<- NULL
   dn <- subset(dn, relevance >= min_relevance)
+  if(nrow(dn)==0){
+    stop("No observations satisfy relevance threshold.")
+  }
 
   if(news_type =="by_story"){
     dn <- dplyr::group_by(dn, date, altId)
