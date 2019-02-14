@@ -609,6 +609,9 @@ daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
   dn$date <- tm
   row.names(dn)<- NULL
   dn <- subset(dn, relevance >= min_relevance)
+  if(nrow(dn)==0){
+    stop("No observations satisfy relevance threshold.")
+  }
 
   if(news_type =="by_story"){
     dn <- dplyr::group_by(dn, date, altId)
@@ -740,27 +743,23 @@ news_days <- function(dn, n=1, on="months", ind=NULL, from_first=TRUE,
                       items=FALSE){
   if(!is.null(ind)){dn <- cbind(dn,ind); dn <- dn[ind]}
   eps <- xts::endpoints(dn, on=on)
-  if (from_first) {eps[1] <- 1} else { eps <- eps[2:length(eps)]}
+  if (from_first){eps[1] <- 1} else { eps <- eps[-1]}
   nmat <- as.data.frame(matrix(0,ncol=ncol(dn),nrow=length(eps)))
   nmat <- as.xts(nmat,order.by = index(dn)[eps])
   colnames(nmat) <- colnames(dn)
+  eps[1] <- eps[1]-1
   if(items==FALSE){
     for (i in 1:(length(eps)-n)){
-      news_subset <- dn[eps[i]:eps[i+n],]
+      news_subset <- dn[(eps[i]+1):eps[i+n],]
       for (j in 1:ncol(dn)){
-        ns <- news_subset[,j]
-        n_days <- sum(!is.na(ns))
-        nmat[index(dn)[eps[i+n]],j] <- n_days
+        nmat[index(dn)[eps[i+n]],j] <- sum(!is.na(news_subset[,j]))
       }
     }
   } else{
     for (i in 1:(length(eps)-n)){
-      news_subset <- dn[eps[i]:eps[i+n],]
+      news_subset <- dn[(eps[i]+1):eps[i+n],]
       for (j in 1:ncol(dn)){
-        ns <- news_subset[,j]
-        ns[is.na(ns),1]<-0
-        n_items <- sum(ns)
-        nmat[index(dn)[eps[i+n]],j] <- n_items
+        nmat[index(dn)[eps[i+n]],j] <- sum(news_subset[,j],na.rm = TRUE)
       }
     }
   }
@@ -827,16 +826,18 @@ median_adjust_deprecated <- function(ns,hist_members=newHM){
 #' Note: this function relies on hist_members containing NAs
 #' to represent non-membership (as output by Bloomberg wrappers)
 #' Note also that news data for all non-members will be zero.
-median_adjust <- function(ns,hist_members=newHM,func=median){
+median_adjust <- function(ns,hist_members=newHM,func=median,zero_fill=TRUE){
   # need to recall which rows have no data
   no_data <- apply(ns,1,function(x) sum(is.na(x))) == ncol(ns)
   hist_members <- hist_members[index(ns),names(ns)]
   ns <- ns*hist_members # This makes non-member news data NA
   ns <- ns-apply(ns,1,func,na.rm=TRUE)
-  # Fill all NAs with zeros, but make non-members NA again, since they were not
-  # median-adjusted and their zero-values will be meaningless.
-  ns <- zoo::na.fill(ns,0)*hist_members
-  # also make rows with no data NA again
+  if(zero_fill){
+    # Fill all NAs with zeros, but make non-members NA again, since they were not
+    # median-adjusted and their zero-values will be meaningless.
+    ns <- zoo::na.fill(ns,0)*hist_members
+    # also make rows with no data NA again
+  }
   ns[no_data,] <- NA
   return(ns)
 }
@@ -917,6 +918,7 @@ rp_cum_rets <-  function(wts,df_rets,stop_loss=NULL){
 #' the number of shares doubles, would be 0.5.
 #' This is the form returned by quantmod::getSplits().
 ca_adjust <- function(x, splits){
+  x <- x[!duplicated(index(x)),]
   ind <- index(x)
   x <- na.omit(x)
   d <- cbind(x,splits)[paste0(range(index(x)),collapse = "::")]
@@ -930,6 +932,7 @@ ca_adjust <- function(x, splits){
 
 #' Function for adjusting prices for dividends
 div_adjust <- function(x, divs){
+  x <- x[!duplicated(index(x)),]
   # remove duplicate dividends (if you want summed, should be added elsewhere)
   is_duplicated <- duplicated(cbind(index(divs),as.numeric(divs)))
   divs <- divs[!is_duplicated,]
@@ -948,10 +951,16 @@ div_adjust <- function(x, divs){
 }
 
 #' Function for adjusting prices for splits and dividends
-adjust_prices <- function(x, divs=NULL, splits=NULL){
+#' cch are splits that need to be used to adjust dividends
+#' if splits are provided by cch is null, all splits will be used to adjust
+#' dividends.
+#' Approach is: adjust dividends, adjust prices for splits, adjust
+#' split-adjusted prices for dividends using adjusted dividends.
+adjust_prices <- function(x, divs=NULL, splits=NULL, cch=NULL){
   if(!is.null(splits)){
     if(!is.null(divs)){
-      td_a <- ca_adjust(divs, splits = splits)
+      if(is.null(cch)){cch <- splits}
+      td_a <- ca_adjust(divs, splits = cch)
       tp_a <- ca_adjust(x, splits = splits)
       tp_a <- div_adjust(tp_a, divs = td_a)
     } else {
@@ -966,9 +975,10 @@ adjust_prices <- function(x, divs=NULL, splits=NULL){
 #' Function for converting xts to data.frames with time index
 #' for the purpose of saving to file.
 xts_to_df <- function(x, datecol="date"){
+  nm <- names(x)
   tm <- index(x)
   x <- data.frame(x)
-  nm <- names(x)
+  names(x) <- nm
   x$date <- tm
   x <- x[,c("date",nm)]
   row.names(x) <- NULL
