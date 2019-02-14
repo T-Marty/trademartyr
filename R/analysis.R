@@ -1,6 +1,6 @@
 #' Function to form panel data from a portfolio equity matrix. A precursor
 #' to performing robust regression between portfolio legs.
-panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
+panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE, leading=FALSE){
   if(is.null(names(rpmat))){names(rpmat) <- paste(1:ncol(rpmat))}
   if(!is.null(ind_mat)){
     inames <- names(ind_mat)
@@ -15,11 +15,12 @@ panelise_rp <- function(rpmat,ind_mat=NULL,to_monthly=TRUE){
   }
   rp_list <- list()
   for (i in 1:ncol(rpmat)){
-    x <- zoo::na.trim(rpmat[,i])
+    x <- rpmat[,i]
     if(to_monthly){
-      x <- quantmod::monthlyReturn(x,leading=FALSE)
+      x <- period_return(x,leading=leading)
       index(x) <- as.yearmon(index(x))
     } else{
+      x <- zoo::na.trim(x)
       x <- PerformanceAnalytics::Return.calculate(x,method = "discrete")
     }
     names(x) <- "rp"
@@ -67,7 +68,7 @@ load_fama_french <- function(ffdir,as_df=TRUE,freq="monthly"){
 #' portfolio in a double-sorted portfolio formation procedure. The returns
 #' to a long-short portfolio of the most extreme second layer quantiles within
 #' each first-layer quantile is also provided.
-cross_quantile_table <- function(Vars,groupings,K_m,hhll=FALSE,
+cross_quantile_table <- function(Vars,groupings,K_m,hhll=FALSE,DF_rets,
                                  verbose=TRUE,remove_period=FALSE,date1=NULL,
                                  date2=NULL,whole_months=TRUE){
   # Get groupings/ranks
@@ -155,7 +156,7 @@ cross_quantile_table <- function(Vars,groupings,K_m,hhll=FALSE,
 
 #' Function to calculate and tabulate the mean *equity* return for every quantile
 #' portfolio in a single-sorted portfolio procedure.
-inter_quantile_table_eq <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
+inter_quantile_table_eq <- function(Vars,groupings,DF_rets,to_monthly=TRUE,diff=TRUE,
                                  verbose=FALSE){
   # Get groupings/ranks
   ranks <- multi_rank(Vars=Vars, groupings = groupings)
@@ -196,7 +197,7 @@ inter_quantile_table_eq <- function(Vars,groupings,to_monthly=TRUE,diff=TRUE,
   if(to_monthly){
     rp_list <- lapply(rp_list,
                       function(x) quantmod::monthlyReturn(na.omit(x),
-                                                          leading=FALSE))
+                                                          leading=TRUE))
   }
   rp_list <- do.call(cbind,rp_list)
   names(rp_list) <- names(weight_list)
@@ -331,7 +332,7 @@ mean_return_table <- function(rps,verbose=FALSE,sig=4,leading=FALSE){
     colnames(num) <- c("mean","t-stat","p-val")
     return(list(res_mat=data.frame(tab),num=num))
   }
-  return(as.data.frame(tab))
+  return(data.frame(tab,stringsAsFactors = FALSE))
 }
 
 # Function to get the mean buy-and-hold (portfolio) response to an event,
@@ -378,7 +379,7 @@ event_response_bh <- function(weights,df_rets,horizon,on="months",stop_loss=NULL
     }
     lsm <- wts_sum_l*lm+wts_sum_s*sm
     if(!is.null(stop_loss)){
-      if(min(lsm) <=- 1*stop_loss) {
+      if(min(lsm)<=-1*stop_loss){
         wls <- which(lsm <= -1*stop_loss)[1]
         hold_ret_ls <- lsm[wls]
         lsm[(wls+1):length(lsm)] <- NA
@@ -386,12 +387,12 @@ event_response_bh <- function(weights,df_rets,horizon,on="months",stop_loss=NULL
         lm[(wls+1):length(lm)] <- NA
         hold_ret_l <- (tail(na.omit(lm),1)-1)*wts_sum_l
         hold_ret_s <- (tail(na.omit(sm),1)+1)*wts_sum_s
-      } else {
+      } else{
         hold_ret_l <- (tail(lm,1)-1)*wts_sum_l
         hold_ret_s <- (tail(sm,1)+1)*wts_sum_s
         hold_ret_ls <- tail(lsm,1)
       }
-    } else {
+    } else{
       hold_ret_l <- (tail(lm,1)-1)*wts_sum_l
       hold_ret_s <- (tail(sm,1)+1)*wts_sum_s
       hold_ret_ls <- tail(lsm,1)
@@ -506,10 +507,7 @@ append_group <- function(pmat,Vars,groupings,Id="ticker"){
 
 #' Function to get different types of mean return from portfolio return object.
 mean_return <- function(rpmat,overlapping=TRUE,leading=FALSE){
-  rp <- lapply(1:ncol(rpmat),
-               FUN=function(x) quantmod::monthlyReturn(na.omit(rpmat[,x]),
-                                                       leading=leading))
-  rp <- do.call(cbind,rp)
+  rp <- period_return(rpmat, leading = leading)
   if (overlapping){
     rp <- na.omit(rp)
     ts_mean <- rowMeans(rp)
@@ -596,7 +594,7 @@ remove_discordant <- function(weights,Raw){
 #' in that sorting is not conducted consecutively. Rather, the ranks of an
 #' asset with respect to each variable are multiplied together.
 #' Removes assets with discordant information if Raw !=null.
-multi_rank_no_order <- function(Vars,Raw,long_only=FALSE){
+multi_rank_no_order_deprecated <- function(Vars,Raw,long_only=FALSE, TopN){
   # Note: Zero used to identify non-investable assets
   r <- Vars[[1]]
   for (i in 2:length(Vars)){
@@ -630,9 +628,40 @@ multi_rank_no_order <- function(Vars,Raw,long_only=FALSE){
   return(wts)
 }
 
+#' Function which combines individual ranks simultaneosly, as opposed to
+#' sequentially as in multi_rank.
+# Like multi_rank, it is assumed ranks already account for missing data or
+#' non-membership with zeros.
+multi_rank_no_order <- function(rank_list, type = c("dist","sum","prod")){
+  nms <- names(rank_list[[1]])
+  # Merge on dates
+  ind <- sort(unique(do.call("c",lapply(rank_list,
+                                        function(x) as.Date(zoo::index(x))))))
+  rank_list <- lapply(rank_list, function(x) cbind(x,ind))
+  # Rank
+  type = match.arg(type)
+  if (type=="sum"){
+    r <- Reduce("+",rank_list)
+  } else if (type=="prod"){
+    r <- Reduce("*",rank_list)
+  } else {
+    r <- sqrt(Reduce("+",lapply(rank_list,function(x) x^2)))
+  }
+  r <- r*Reduce("*",lapply(rank_list,function(x) x != 0))
+  r <- na.fill(r,0)
+  for (i in 1:nrow(r)){
+    if(sum(r[i,]!=0)==0){next()}
+    r[i,r[i,]!=0] <- rank(as.numeric(r[i,r[i,]!=0]),ties.method="first")
+  }
+  names(r) <- nms
+  return(r)
+}
+
+
 #' Function to parallelize return-based simulation over each leg.
 return_sim <- function(weights,K_m=6,DF_rets,
-                       stop_loss=0.9,holding_time=FALSE, initEq=1){
+                       stop_loss=0.9,holding_time=FALSE, initEq=1,
+                       add_initEq=FALSE){
   cores <- detectCores()
   mycluster <- makeCluster(cores-1,type = "FORK")
   registerDoParallel(mycluster)
@@ -645,9 +674,11 @@ return_sim <- function(weights,K_m=6,DF_rets,
   names(out) <- paste0("portfolio",1:K_m)
   rmat <- do.call(cbind, out) ;rm(out)
   # Make first value in each column initial equity
-  for (i in 1:ncol(rmat)){
-    last_na <- which(!is.na(rmat[,i]))[1]-1
-    rmat[last_na,i] <- initEq
+  if(add_initEq){
+    for (i in 1:ncol(rmat)){
+      last_na <- which(!is.na(rmat[,i]))[1]-1
+      rmat[last_na,i] <- initEq
+    }
   }
   rp <- xts(rowSums(na.trim(rmat)),order.by = index(na.trim(rmat)))
   return(list(rmat=rmat,rp=rp))
@@ -686,41 +717,45 @@ remove_discordant_bruce <- function(primary_ranks,Raw,TopN){
 
 #' Function to run factor regressions and neatly present results.
 #' Allows for panel-style or mean overlapping return analysis.
-alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
+alpha_table <- function(panel_list,factor_mat,
+                        model=c("TS","TSX","CAPM","FF3","FF5"),
                         method=c("Panel","Fama"),vcov_panel=plm::vcovSCC,
-                        vcov_fama=sandwich::NeweyWest,to_monthly=TRUE){
+                        vcov_fama=sandwich::NeweyWest,to_monthly=TRUE,
+                        leading=FALSE,stat=c("tval","pval","both")){
   method = match.arg(method)
   model = match.arg(model)
+  stat = match.arg(stat)
   fmla <- switch(model, CAPM=I(rp-RF)~Mkt_RF, FF3=I(rp-RF)~Mkt_RF+HML+SMB,
-                 FF5=I(rp-RF)~Mkt_RF+HML+SMB+RMW+CMA,TS=rp~1)
+                 FF5=I(rp-RF)~Mkt_RF+HML+SMB+RMW+CMA,TS=rp~1,TSX=I(rp-RF)~1)
   if(method=="Panel"){
     # Method 1 - SCC Panel
     alpha1 <- numeric(length(panel_list))
     p1 <- numeric(length(panel_list))
+    t1 <- numeric(length(panel_list))
     for (i in 1:length(panel_list)){
       rpmat <- panel_list[[i]]
       rp_panel <- panelise_rp(rpmat,ind_mat = factor_mat,
-                              to_monthly=to_monthly)
+                              to_monthly=to_monthly,leading=leading)
       reg_model <- plm(fmla,data=rp_panel,index=c("portfolio","date"),
                        model="pooling")
       coefs <- as.matrix(coeftest(reg_model, vcov. = vcov_panel))
-      alpha1[i] <- round(coefs[1,1],4)
+      alpha1[i] <- sprintf("%.4f",coefs[1,1])
       p1[i] <- round(coefs[1,4],4)
+      t1[i] <- round(coefs[1,3],4)
     }
   } else if(method=="Fama"){
     alpha1 <- numeric(length(panel_list))
     p1 <- numeric(length(panel_list))
+    t1 <- numeric(length(panel_list))
     for (i in 1:length(panel_list)){
-      rpmat <- zoo::na.trim(panel_list[[i]])
+      rpmat <- panel_list[[i]]
       if(to_monthly){
-        out <- lapply(1:ncol(rpmat),
-                      FUN=function(x){quantmod::monthlyReturn(rpmat[,x],
-                                                              leading=FALSE)})
-        out <- do.call(cbind,out)
+        out <- period_return(rpmat,leading = leading)
         index(out) <- as.yearmon(index(out))
         rpmat <- na.omit(out)
       } else{
         rpmat <- PerformanceAnalytics::Return.calculate(rpmat,"discrete")
+        rpmat <- na.omit(rpmat)
       }
       tm <- index(rpmat)
       rpmat <- data.frame(cbind(date=1,rp=rowMeans(rpmat,na.rm = FALSE)))
@@ -728,16 +763,22 @@ alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
       rpmat <- merge(rpmat,factor_mat)
       reg_model <- lm(fmla,data=rpmat)
       coefs <- as.matrix(coeftest(reg_model, vcov.=vcov_fama))
-      alpha1[i] <- round(coefs[1,1],4)
+      alpha1[i] <- sprintf("%.4f",coefs[1,1])
       p1[i] <- round(coefs[1,4],4)
+      t1[i] <- round(coefs[1,3],4)
     }
   }
-  alpha1 <- format(alpha1,scientific = FALSE)
   alpha1[p1<0.05] <- paste0(alpha1[p1<0.05],"*")
   alpha1[p1<0.01] <- paste0(alpha1[p1<0.01],"*")
   alpha1[p1<0.001] <- paste0(alpha1[p1<0.001],"*")
-  p1 <- format(p1,scientific = FALSE)
-  capm_table1 <- data.frame(rbind(intercept=alpha1,paste0("(",p1,")")))
+  p1 <- sprintf("%.4f",p1)
+  t1 <- sprintf("%.4f",t1)
+  stat1 <- switch(stat,pval=paste0("(",p1,")"),tval=paste0("(",t1,")"),
+                  both=paste0(p1," (",t1,")"))
+  statname <- switch(stat,pval="(p-val)",tval="(t-stat)",
+                     both="p-val (t-stat)")
+  capm_table1 <- data.frame(rbind(alpha1,stat1),stringsAsFactors = FALSE)
+  rownames(capm_table1) <- c("Intercept", statname)
   names(capm_table1) <- names(panel_list)
   return(capm_table1)
 }
@@ -753,14 +794,15 @@ alpha_table <- function(panel_list,factor_mat,model=c("TS","CAPM","FF3","FF5"),
 #' rebalanced each month (although the stocks within each holding period) are
 #' buy-hold, or whatever the strategy implemented.
 #' Made to be used directly from strategy output.
-event_from_rmat <- function(rmat,K_m,verbose=FALSE,returns=FALSE){
+event_from_rmat <- function(rmat,K_m,verbose=FALSE,returns=FALSE,
+                            index_at="endof",leading=FALSE){
   res_list <- vector('list',ncol(rmat))
   if(returns){
     for (i in 1:ncol(rmat)){
       x <- na.omit(rmat[,i])
       #x <- to.monthly(x,indexAt = "endof")
       #x <- x$x.Close
-      x <- na.omit(monthlyReturn(x,leading = FALSE))
+      x <- na.omit(quantmod::monthlyReturn(x,leading = leading))
       res_mat <- data.frame(matrix(nrow=ceiling(nrow(x)/K_m),ncol=(K_m+2)))
       names(res_mat) <- c("date",paste0("m",0:K_m))
       res_mat$m0 <- 0
@@ -780,7 +822,7 @@ event_from_rmat <- function(rmat,K_m,verbose=FALSE,returns=FALSE){
     for (i in 1:ncol(rmat)){
       x <- rmat[,i]
       x <- na.omit(x)
-      x <- to.monthly(x,indexAt = "endof")
+      x <- xts::to.monthly(x,indexAt = index_at)
       x <- x$x.Close
       res_mat <- data.frame(matrix(nrow=ceiling(nrow(x)/K_m),ncol =(K_m+2)))
       names(res_mat) <- c("date",paste0("m",0:K_m))
@@ -827,4 +869,141 @@ vcovDK <- function(x,maxlag=NULL,kern){
   maxlag <- ifelse(is.null(maxlag),ceiling((max(pdim(x)$Tint$Ti))^(1/4)),maxlag)
   plm::vcovSCC(x, maxlag=maxlag,
                wj=function(j,maxlag){kern_weights(j,maxlag,kern)})
+}
+
+#' Function to lead xts objects.
+#' Example for calculating forward return:
+#' fwd_6 <- lead_xts(x,6)/x -1
+lead_xts <- function(df,n){
+  df <- as.data.frame(df)
+  df <- xts(apply(df,2,dplyr::lead,n=n),as.POSIXct(rownames(df)))
+}
+
+# Function for calculating forward or backward return over n periods for specified
+# periodicity. Handles rather than removes NAs, unlike quantmod::periodReturn.
+# Uses last available observation each period.
+n_period_return <- function(df,n=1,on="months",forward=FALSE,ind=NULL,
+                            leading=FALSE,type=c("discrete","continuous")){
+  if(is.null(ind)){
+    ind <- index(df)
+  }
+  eps <- endpoints(df,on=on)[-1]
+  sps <- c(1, eps[-length(eps)]+1)
+  out <- vector('list',ncol(df))
+  for(i in 1:ncol(df)){
+    x <- df[,i]
+    k <- numeric(length(eps))
+    for(j in 1:length(eps)){
+     p <- c(NA,na.omit(x[sps[j]:eps[j]]))
+     k[j] <- p[length(p)]
+    }
+    out[[i]] <- k
+  }
+  out <- xts(Reduce(cbind,out),ind[endpoints(ind,on=on)[-1]])
+  names(out) <- names(df)
+  if(leading){
+    out <- rbind(df[ind[1],],out)
+  }
+  type <- match.arg(type)
+  out <- switch(type, discrete = out/lag(out,n)-1, continuous = diff(log(out)))
+  if(forward){
+    out <- lead_xts(out, n)
+  }
+  return(out)
+}
+
+#' Function for applying alpha function to subperiods and tabulating.
+#' @param rps List of prices (portfolios) to analyse.
+#' @param periods List of periods in YYYYmmdd string format,
+#' e.g. "20030128::20040101". Use '-' to exclude periods, e.g.
+#' "-20030128::20040101".
+#' @param func Function to get mean return or alpha, e.g. alpha_table(...)
+#' @param str_fun Function to apply to each table. Useful for keeping or removing
+#' t-stats or p-vals.
+#' @details Example:
+#' p1 <- "20030101::20080914"
+#' p2 <- "-20080915::20090930"
+#' p3 <- "20091001::20171231"
+#' periods <- list(p1,p2,p3)
+#' rps <- mom_deciles$portfolios[c(1,10,11)]
+#' names(rps) <- c("High Mom","Low Mom","HML Mom")
+#' func <- function(x) {t(alpha_table(x,model = "TS",method="Panel", factor_mat=ff3,
+#'                                    vcov_panel=vcov_panel,leading=TRUE))}
+#' str_func1 <- function(x) {gsub(" .*", "", x)} # remove text after space
+#' str_func2 <- function(x) {gsub(".* ", "", x)} # remove text before space
+#' spts <- sub_period_alphas(lapply(rps,na.omit),periods,func= function(x)
+#' {t(mean_return_table(x,leading = TRUE))},str_func = str_func1)
+#' spts <- cbind(rep(c("Pre-GFC","Ex-GFC","Post-GFC"),each=2),spts)
+sub_period_alphas <- function(rps,periods,func,str_func=NULL){
+  if(is.null(names(rps))){
+    nms <- paste0("P",1:length(rps))
+  } else {
+    nms <- names(rps)
+  }
+  rp_list <- vector('list',length(rps))
+  # Create dfs for each sub-period
+  for (j in 1:length(rps)){
+    rmat <- rps[[j]]
+    sub_list <- vector('list',length(periods))
+    for(i in 1:length(periods)){
+      if(substr(periods[i],1,1)=="-"){
+        pd <- lapply(strsplit(gsub("-","",periods[i]),"::"),lubridate::ymd)
+        rp_na <- rmat
+        rp_na[index(rp_na)>=pd[[1]][1] & index(rp_na)<=pd[[1]][2],] <- NA
+        sub_list[[i]] <- rp_na
+      } else {
+        sub_list[[i]] <- rmat[periods[[i]]]
+      }
+    }
+    rp_list[[j]] <- sub_list
+  }
+  # Perform regressions/get alpha
+  mrt <- lapply(rp_list,func)
+  mrt <- do.call(cbind,mrt)
+  if(!is.null(str_func)){
+    mrt <- apply(mrt,2,str_func)
+  }
+  resmat <- matrix("",nrow=length(periods)*2,ncol=length(rps))
+  resmat[which(1:nrow(resmat)%%2==1),] <- mrt[,which(1:ncol(mrt)%%2==1)]
+  resmat[which(1:nrow(resmat)%%2==0),] <- mrt[,which(1:ncol(mrt)%%2==0)]
+  colnames(resmat) <- nms
+  #rn <- lapply(periods,
+  #             function(x) paste0(ymd(unlist(strsplit(x,"::"))),collapse="/\n"))
+  #resmat <-cbind(rep(unlist(rn),each=2),resmat)
+  return(resmat)
+}
+
+#' Wrapper for quantmod::periodReturn that handles NAs appropriately.
+#' quantmod::periodReturn will use last non-NA price, regardless of how long
+#' the price occurred. Thus, following long periods of missing data, the
+#' magnitude of period return will be extremely large.
+#' Note: This function will behave the same as quantmod::periodReturn if
+#' index is missing. I.e. missing periods should be populated with NAs.
+period_return <- function(x,period="monthly",type="arithmetic",leading=FALSE){
+  r_list <- vector('list',ncol(x))
+  for (i in 1:ncol(x)){
+    y <- zoo::na.trim(x[,i])
+    if(sum(is.na(y))>0){
+      na_first <- min(which(is.na(y)))-1
+      na_last <- max(which(is.na(y)))+1
+      y1 <- quantmod::periodReturn(y[1:na_first,],
+                                   period=period,type=type,leading=leading)
+      y2 <- quantmod::periodReturn(y[na_last:nrow(y),],
+                                   period=period,type=type,leading=leading)
+      r_list[[i]] <- rbind(y1,y2)
+    } else{
+      r_list[[i]] <- quantmod::periodReturn(y,period=period,type=type,
+                                            leading=leading)
+    }
+  }
+  return(do.call(cbind,r_list))
+}
+
+#' Helper function to add significance marks to coefficients, given a
+#' vector of coefficients, a vector p values, and vector significance cut-offs.
+signif_stars <- function(a,p,sigs = c(0.05,0.01,0.001)){
+  for (i in 1:length(sigs)){
+    a[p < sigs[i]] <- paste0(a[p <sigs[i]],"*")
+  }
+  return(a)
 }
