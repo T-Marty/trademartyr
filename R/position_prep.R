@@ -682,3 +682,22 @@ member_exit <- function(df, hist_members=newHM){
   }
   return(df)
 }
+
+#' Function to rank by row, keeping NAs as NAs.
+#'
+#' @param df An xts, data.frame or matrix in wide format.
+#' @param low_to_high (Logical). If TRUE, the largest value will be ranked
+#' number 1.
+#' @param ties_method (String). Method for handling ties. See base::rank
+var_rank <- function(df,low_to_high=TRUE, ties_method='first'){
+  a <- 1
+  if(low_to_high){
+    a <- -1
+  }
+  not_na <- which(rowSums(is.na(df))!=ncol(df))
+  for(i in not_na){
+    df[i,!is.na(df[i,])] <- rank(as.numeric(a*df[i,!is.na(df[i,])]),
+                                 ties.method=ties_method)
+  }
+  return(df)
+}
