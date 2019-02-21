@@ -1,4 +1,75 @@
 
+#' Function to standardise a variable with respect to an index position
+#' (e.g. each time period) while in panel format.
+#'
+#' @param df data.frame in long (panel) format.
+#' @param var_name Column name to standardise (string).
+#' @param index_name Column name of index to standardise within (string).
+#' @param type Standardisation method (string). Default="standardise".
+#' @param vector_only Return standardised values only or full data.frame?
+#' (Logical)
+#' @details standardise = (x-mean(x))/sd(x).
+#' min_max = (x-min(x))/(max(x)-min(x))
+standardise_long <- function(df, var_name, index_name,
+                             type=c("standardise", "min_max"),
+                             vector_only=FALSE){
+  type = match.arg(type)
+  orig_columns <- colnames(df)
+  colnames(df)[which(colnames(df)==var_name)] <- "var_tm90"
+  colnames(df)[which(colnames(df)==index_name)] <- "ind_tm90"
+  if(type=="standardise"){
+    df_sum <- dplyr::group_by(df,ind_tm90) %>%
+      dplyr::summarise(var_sd=sd(var_tm90, na.rm=T),
+                       var_mean=mean(var_tm90, na.rm=T))
+    df <- merge(df,df_sum,all.x = T) %>%
+      dplyr::mutate(var_std=(var_tm90-var_mean)/var_sd)
+  }
+  if(type=="min_max"){
+    df_sum <- dplyr::group_by(df,ind_tm90) %>%
+      dplyr::summarise(var_min=min(var_tm90, na.rm=T),
+                       var_range=diff(range(var_tm90, na.rm=T)))
+    df <- merge(df,df_sum,all.x = T) %>%
+      dplyr::mutate(var_std=(var_tm90-var_min)/var_range)
+  }
+  if(vector_only){
+    return(df$var_std)
+  }
+  colnames(df)[which(colnames(df)=="var_tm90")] <- var_name
+  colnames(df)[which(colnames(df)=="ind_tm90")] <- index_name
+  colnames(df)[which(colnames(df)=="var_std")] <- paste0(var_name,"_sx")
+  df <- df[,c(orig_columns, paste0(var_name,"_sx"))]
+  return(df)
+}
+
+#' Function to standardise each *row* of a variable while in wide format.
+#'
+#' @param df An xts or data.frame in long (panel) format.
+#' @param type Standardisation method (string). Default="standardise".
+#' @details standardise = (x-mean(x))/sd(x).
+#' min_max = (x-min(x))/(max(x)-min(x))
+standardise_wide <- function(df, type=c("standardise", "min_max")){
+  type = match.arg(type)
+  xts_flag = FALSE
+  if(match("xts",class(df))==1){
+    ind <- zoo::index(df)
+    xts_flag = TRUE
+  }
+  na_cols <- which(rowSums(is.na(df))==ncol(df))
+  df[na_cols,1:min(10,ncol(df))] <- 1:min(10,ncol(df))
+  if(type=="min_max"){
+    df_std <- t(
+      apply(df, 1, function(x) (x-min(x,na.rm = T))/diff(range(x,na.rm = T))))
+  }
+  if(type=="standardise"){
+    df_std <- t(apply(df,1,function(x) (x-mean(x,na.rm = T))/sd(x,na.rm = T)))
+  }
+  df_std[na_cols,] <- NA
+  if(xts_flag){
+    df_std <- xts::xts(df_std,ind)
+  }
+  return(df_std)
+}
+
 #' Function to read csv files as xts objects.
 #'
 #' @param dir The directory in which the required file is stored (string)
@@ -1038,3 +1109,35 @@ asx_trading_dates <- function(df_cl=NULL,file_path=processed_dir){
   return(trade_dates)
 }
 
+#' Function for sorting rows of xts or data frame into groupings based on value.
+#' Does not take into account membership. NAs remain as NAs.
+#' @param df An xts, matrix, or data.frame object.
+#' @param groupings Number of groups in each row.
+#' @param low_to_high If TRUE, high values will be associated with a higher
+#' @param ties_method `ties.method` parameter for base::rank()
+#' group number.
+quantile_sort <- function(df, groupings, low_to_high=TRUE,ties_method='first'){
+  # Get rows that aren't all NAs
+  k <- rowSums(is.na(df)) != ncol(df)
+  # Matrix to store results
+  x <- matrix(nrow=nrow(df),ncol = ncol(df))
+  # A 1 will be in a numerically lower group than a 10
+  if(low_to_high){
+    labs <- 1:groupings
+  } else{
+    # A 10 will be in a numerically lower group than a 1
+    labs <- groupings:1
+  }
+  for(i in which(k)){
+    x[i,!is.na(df[i,])] <- as.numeric(
+      cut(rank(na.omit(as.numeric(df[i,])),ties.method=ties_method),
+          breaks=groupings, labels=labs))
+  }
+  if ('xts' %in% class(df)){
+    x <- xts::xts(x,order.by = zoo::index(df))
+  } else if ( "data.frame" %in% class(df)){
+    x <- as.data.frame(x)
+  }
+  colnames(x) <- colnames(df)
+  return(x)
+}
