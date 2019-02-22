@@ -894,20 +894,28 @@ n_period_return <- function(df,n=1,on="months",forward=FALSE,ind=NULL,
     x <- df[,i]
     k <- numeric(length(eps))
     for(j in 1:length(eps)){
-     p <- c(NA,na.omit(x[sps[j]:eps[j]]))
-     k[j] <- p[length(p)]
+      p <- c(NA,na.omit(x[sps[j]:eps[j]]))
+      k[j] <- p[length(p)]
     }
     out[[i]] <- k
   }
   out <- xts(Reduce(cbind,out),ind[endpoints(ind,on=on)[-1]])
-  names(out) <- names(df)
   if(leading){
-    out <- rbind(df[ind[1],],out)
+    # Get first non-na value to calulate first return period
+    out <- cbind(out,ind[1])
+    for (i in 1:ncol(out)){
+      nai <- which(!is.na(out[,i]))[1]
+      out[nai-1,i] <- as.numeric(na.omit(df[,i])[1])
+    }
   }
+  names(out) <- names(df)
   type <- match.arg(type)
   out <- switch(type, discrete = out/lag(out,n)-1, continuous = diff(log(out)))
   if(forward){
     out <- lead_xts(out, n)
+  }
+  if(leading){
+    out <- out[-1,]
   }
   return(out)
 }
@@ -979,6 +987,8 @@ sub_period_alphas <- function(rps,periods,func,str_func=NULL){
 #' magnitude of period return will be extremely large.
 #' Note: This function will behave the same as quantmod::periodReturn if
 #' index is missing. I.e. missing periods should be populated with NAs.
+#' Warning!: Should only be used if there is a single continuous period of
+#' NAs!
 period_return <- function(x,period="monthly",type="arithmetic",leading=FALSE){
   r_list <- vector('list',ncol(x))
   for (i in 1:ncol(x)){
