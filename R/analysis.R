@@ -910,13 +910,14 @@ n_period_return <- function(df,n=1,on="months",forward=FALSE,ind=NULL,
   }
   names(out) <- names(df)
   type <- match.arg(type)
-  out <- switch(type, discrete = out/lag(out,n)-1, continuous = diff(log(out)))
+  out <- switch(type, discrete = out/lag(out,n)-1,
+                continuous = diff(log(out),differences=n))
   if(forward){
     out <- lead_xts(out, n)
   }
-  if(leading){
-    out <- out[-1,]
-  }
+  # if(leading){
+  #   out <- out[-1,]
+  # }
   return(out)
 }
 
