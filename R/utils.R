@@ -1141,3 +1141,30 @@ quantile_sort <- function(df, groupings, low_to_high=TRUE,ties_method='first'){
   colnames(x) <- colnames(df)
   return(x)
 }
+
+#' Function to conduct sequential sorting with respect to a number of variables
+#' and an index.
+#' @param df An xts, matrix, or data.frame object.
+#' @param vars A vector of variable names (in order) to sort by
+#' @param groupings Number of groups for each variable.
+#' @param index String indicating grouping variable (i.e. date)
+#' @param low_to_high If TRUE, high values will be mapped to high group numbers
+multi_sort_long <- function(df,vars,groupings,index,low_to_high=TRUE){
+  cn <- function(x,y,z){
+    tryCatch(cut_number(x,y,z),error=function(e) rep(NA,length(x)))
+  }
+  ind <- index
+  gs <- groupings
+  labs <- if(low_to_high){gs[1]:1} else{1:gs[1]}
+  df <- group_by(df,date) %>%
+    mutate((!!as.symbol(paste0(vars[1],"_g"))) :=
+             cut_number(!!as.symbol(vars[1]),gs[1],labs)) %>% ungroup()
+
+  for(i in 2:length(vars)){
+    labs <- if(low_to_high){gs[i]:1} else{1:gs[i]}
+    df <- group_by(df, !!as.symbol(ind), !!as.symbol(paste0(vars[i-1],"_g"))) %>%
+      mutate((!!as.symbol(paste0(vars[i],"_g"))) :=
+               cn(!!as.symbol(vars[i]),gs[i],labs)) %>% ungroup()
+  }
+  return(df)
+}

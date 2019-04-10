@@ -486,6 +486,7 @@ vnames <- function(f){
   f <- gsub("/"," ",f,fixed = TRUE)
   f <- stringr::str_squish(f)
   f <- unlist(strsplit(f,split = " "))
+  f <- setdiff(f,as.character(1:9))
   return(unique(f))
 }
 
