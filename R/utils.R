@@ -1150,6 +1150,7 @@ quantile_sort <- function(df, groupings, low_to_high=TRUE,ties_method='first'){
 #' @param index String indicating grouping variable (i.e. date)
 #' @param low_to_high If TRUE, high values will be mapped to high group numbers
 multi_sort_long <- function(df,vars,groupings,index,low_to_high=TRUE){
+  # Function to catch errors when not enough non-missing values to create bins.
   cn <- function(x,y,z){
     tryCatch(cut_number(x,y,z),error=function(e) rep(NA,length(x)))
   }
@@ -1158,7 +1159,7 @@ multi_sort_long <- function(df,vars,groupings,index,low_to_high=TRUE){
   labs <- if(low_to_high){gs[1]:1} else{1:gs[1]}
   df <- group_by(df,date) %>%
     mutate((!!as.symbol(paste0(vars[1],"_g"))) :=
-             cut_number(!!as.symbol(vars[1]),gs[1],labs)) %>% ungroup()
+             cn(!!as.symbol(vars[1]),gs[1],labs)) %>% ungroup()
 
   for(i in 2:length(vars)){
     labs <- if(low_to_high){gs[i]:1} else{1:gs[i]}
@@ -1167,4 +1168,47 @@ multi_sort_long <- function(df,vars,groupings,index,low_to_high=TRUE){
                cn(!!as.symbol(vars[i]),gs[i],labs)) %>% ungroup()
   }
   return(df)
+}
+
+#' Function to quickly calculate linear regression coefficients.
+ols <- function (y, x) {
+  xy <- t(x)%*%y
+  xxi <- solve(t(x)%*%x)
+  b <- as.vector(xxi%*%xy)
+  b
+}
+
+#' Function to calculate return convexity for wide xts of returns a la
+#' Chen et al. (2018) "Evolution of historical prices in momentum investing".
+accel <- function(df,j,on="months",dlim){
+  eps <- endpoints(df,on=on,k=1)
+  eps[1] <- 1
+  res_list <- vector('list',ncol(df))
+  for(k in 1:ncol(df)){
+    res <- numeric(length(eps)-j)
+    d <- df[,k]
+    for(i in (j+1):length(eps)){
+      # Get J period subset
+      y <- d[eps[i-j]:eps[i],1]
+      # Check recent trading
+      cond1 <- sum(is.na(tail(y,10))) > 6
+      # Check minimum amount of trading days
+      y <- na.omit(y)
+      cond2 <- nrow(y) <= dlim
+      if(cond1|cond2){
+        res[i-j] <- NA
+        next()
+      }
+      y <- matrix(y,ncol=1)
+      # Create time index
+      t <- (1:nrow(y) - nrow(y))/1000
+      x <- as.matrix(cbind(1,t,t^2),ncol=3)
+      # Get regression coefficients
+      gamma <- ols(matrix(y,ncol=1),x)[3]
+      res[i-j] <- gamma
+    }
+    res_list[[k]] <- res
+  }
+  names(res_list) <- colnames(df)
+  res_list <- xts(do.call(cbind,res_list),index(df[eps[-(1:j)],]))
 }
