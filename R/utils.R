@@ -293,7 +293,7 @@ holdingTime <- function(current_date,end_date,holding_time,holding_unit="month")
 #' ptext <- "naFillFrom(df=DF_cl[,i_1:i_2], ind=master_ind)"
 #' DF_cl <- run_parallel(n=ncol(DF_cl), ptext=ptext)
 #' @note Should wrap in tryCatch to close out cluster even if error
-run_parallel <- function(n, ptext, chunk_size=NULL){
+run_parallel_deprecated <- function(n, ptext, chunk_size=NULL){
   cores <- parallel::detectCores()
   if (is.null(chunk_size)){
     chunk_size=trunc(n/(detectCores()-1))
@@ -313,6 +313,51 @@ run_parallel <- function(n, ptext, chunk_size=NULL){
   }
   parallel::stopCluster(mycluster)
   return(out)
+}
+
+#' Function to perform commands in parallel
+#' @importFrom foreach foreach
+#' @importFrom foreach %dopar%
+#' @examples
+#' DF_cl <- get_cols(sp500,"Close")
+#' ptext <- "na.locf(df=DF_cl, ind=master_ind)"
+#' DF_cl <- run_parallel(ptext=ptext,m=2)
+#' @note Should wrap in tryCatch to close out cluster even if error
+run_parallel_ <- function(ptext,m=2,chunk_size=NULL){
+  # Attempt to obtain list of objects from string
+  s1 <- get_objs(ptext)
+  for(o in s1){
+    k <- tryCatch(class(get(o)),error=function(e){NA})
+    if(sum(c('xts','zoo','data.frame','tbl_df','tbl','matrix')==k)>0){
+      ptext <- switch(m,'1'=sub(o,paste0(o,"[i_1:i_2,]"),ptext),
+                      '2'=sub(o,paste0(o,"[,i_1:i_2]"),ptext))
+      n <- switch(m,'1'=nrow(get(o)),'2'=ncol(get(o)))
+    }
+    break()
+  }
+  # Setup cores and parallelisation parameters
+  cores <- parallel::detectCores()
+  if (is.null(chunk_size)){
+    chunk_size=trunc(n/(detectCores()-1))
+  } else if (chunk_size >= n){
+    chunk_size=trunc(n/(detectCores()-1))
+  }
+  nums1 <- seq(1,n,chunk_size)
+  nums2 <- nums1-1
+  nums2 <- c(nums2[-1],n)
+  # Register clusters
+  mycluster <- parallel::makeCluster(cores-1,type = "FORK")
+  doParallel::registerDoParallel(mycluster)
+  # Begin iteration for chunk z
+  out <- foreach(z = 1:length(nums1)) %dopar% {
+    i_1 <- nums1[z]
+    i_2 <- nums2[z]
+    tryCatch(eval(parse(text=ptext)), error=function(e){NA})
+  }
+  parallel::stopCluster(mycluster)
+  # Combine result either by row or column
+  f <- switch(m,'1'='rbind','2'=cbind)
+  return(do.call(f,out))
 }
 
 #' Function to extract and neatly present the transactions of a list of
