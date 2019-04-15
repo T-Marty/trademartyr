@@ -490,6 +490,18 @@ vnames <- function(f){
   return(unique(f))
 }
 
+#' Function to extract object names from function call.
+#' @param s Function call (string)
+get_objs <- function(s){
+  s <- gsub("*)","",s)
+  s <- gsub(".*\\(","",s)
+  s <- unlist(strsplit(s,","))
+  s <- gsub(".*\\=","",s)
+  s <- s[-grep('\\^|\\*|\\|\\+|-|\\/|"',s)]
+  s <- setdiff(s,c("TRUE","FALSE"))
+  return(s)
+}
+
 #' Function to append the sorting group of an asset for a given variable
 #' (or combination of variables) to panel data.
 append_group <- function(pmat,Vars,groupings,Id="ticker"){
