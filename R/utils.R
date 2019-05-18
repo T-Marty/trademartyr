@@ -331,20 +331,20 @@ run_parallel_ <- function(ptext,m=2,chunk_size=NULL){
     if(sum(c('xts','zoo','data.frame','tbl_df','tbl','matrix')==k)>0){
       ptext <- switch(m,'1'=sub(o,paste0(o,"[i_1:i_2,]"),ptext),
                       '2'=sub(o,paste0(o,"[,i_1:i_2]"),ptext))
-      n <- switch(m,'1'=nrow(get(o)),'2'=ncol(get(o)))
+      n_ops <- switch(m,'1'=nrow(get(o)),'2'=ncol(get(o)))
     }
     break()
   }
   # Setup cores and parallelisation parameters
   cores <- parallel::detectCores()
   if (is.null(chunk_size)){
-    chunk_size=trunc(n/(detectCores()-1))
-  } else if (chunk_size >= n){
-    chunk_size=trunc(n/(detectCores()-1))
+    chunk_size=trunc(n_ops/(detectCores()-1))
+  } else if (chunk_size >= n_ops){
+    chunk_size=trunc(n_ops/(detectCores()-1))
   }
-  nums1 <- seq(1,n,chunk_size)
+  nums1 <- seq(1,n_ops,chunk_size)
   nums2 <- nums1-1
-  nums2 <- c(nums2[-1],n)
+  nums2 <- c(nums2[-1],n_ops)
   # Register clusters
   mycluster <- parallel::makeCluster(cores-1,type = "FORK")
   doParallel::registerDoParallel(mycluster)
@@ -806,10 +806,11 @@ daily_news_scores <- function(dn, min_relevance=0.6, news_type="all", ind=NULL){
 aggregate_news <- function(dn, n=1, w=1, on="months", ind=NULL, from_first=TRUE){
   if(!is.null(ind)){dn <- cbind(dn,ind); dn <- dn[ind]}
   eps <- xts::endpoints(dn, on=on)
-  if (from_first) {eps[1] <- 1} else { eps <- eps[2:length(eps)]}
+  if (from_first) {eps[1] <- 1} else { eps <- eps[-1]}
   nmat <- data.frame(matrix(nrow=length(eps),ncol = ncol(dn)))
   nmat <- as.xts(nmat,order.by = index(dn)[eps])
   colnames(nmat) <- colnames(dn)
+  eps[1] <- eps[1]-1
   if(w == 1){ # average
     for (i in 1:(length(eps)-n)){
       news_subset <- dn[(eps[i]+1):eps[i+n],]
@@ -1175,7 +1176,7 @@ quantile_sort <- function(df, groupings, low_to_high=TRUE,ties_method='first'){
   }
   for(i in which(k)){
     x[i,!is.na(df[i,])] <- as.numeric(
-      cut(rank(na.omit(as.numeric(df[i,])),ties.method=ties_method),
+      cut_number(rank(na.omit(as.numeric(df[i,])),ties.method=ties_method),
           breaks=groupings, labels=labs))
   }
   if ('xts' %in% class(df)){
@@ -1197,20 +1198,28 @@ quantile_sort <- function(df, groupings, low_to_high=TRUE,ties_method='first'){
 multi_sort_long <- function(df,vars,groupings,index,low_to_high=TRUE){
   # Function to catch errors when not enough non-missing values to create bins.
   cn <- function(x,y,z){
-    tryCatch(cut_number(x,y,z),error=function(e) rep(NA,length(x)))
+    tryCatch(ggplot2::cut_number(x,n=y,labels=z),
+             error=function(e) rep(NA,length(x)))
   }
   ind <- index
   gs <- groupings
   labs <- if(low_to_high){gs[1]:1} else{1:gs[1]}
-  df <- group_by(df,date) %>%
+  df <- group_by(df,!!as.symbol(ind)) %>%
     mutate((!!as.symbol(paste0(vars[1],"_g"))) :=
              cn(!!as.symbol(vars[1]),gs[1],labs)) %>% ungroup()
-
-  for(i in 2:length(vars)){
-    labs <- if(low_to_high){gs[i]:1} else{1:gs[i]}
-    df <- group_by(df, !!as.symbol(ind), !!as.symbol(paste0(vars[i-1],"_g"))) %>%
-      mutate((!!as.symbol(paste0(vars[i],"_g"))) :=
-               cn(!!as.symbol(vars[i]),gs[i],labs)) %>% ungroup()
+  # Convert from factor to numeric
+  df[paste0(vars[1],"_g")] <- df[[paste0(vars[1],"_g")]] %>% as.character() %>% 
+    as.numeric()
+  if(length(vars)>1){
+    for(i in 2:length(vars)){
+      labs <- if(low_to_high){gs[i]:1} else{1:gs[i]}
+      df <- group_by(df, !!as.symbol(ind), !!as.symbol(paste0(vars[i-1],"_g"))) %>%
+        mutate((!!as.symbol(paste0(vars[i],"_g"))) :=
+                 cn(!!as.symbol(vars[i]),gs[i],labs)) %>% ungroup()
+      # Convert from factor to numeric
+      df[paste0(vars[i],"_g")] <- df[[paste0(vars[i],"_g")]] %>% 
+        as.character() %>% as.numeric()
+    }
   }
   return(df)
 }

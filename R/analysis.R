@@ -493,11 +493,11 @@ vnames <- function(f){
 #' Function to extract object names from function call.
 #' @param s Function call (string)
 get_objs <- function(s){
-  s <- gsub("*)","",s)
+  s <- substr(ptext,1,nchar(ptext)-1)
   s <- gsub(".*\\(","",s)
   s <- unlist(strsplit(s,","))
   s <- gsub(".*\\=","",s)
-  s <- s[-grep('\\^|\\*|\\|\\+|-|\\/|"',s)]
+  s <- s[setdiff(1:length(s),grep('\\^|\\*|\\|\\+|-|\\/|"',s))]
   s <- setdiff(s,c("TRUE","FALSE"))
   return(s)
 }
