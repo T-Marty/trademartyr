@@ -430,7 +430,8 @@ create_residual <- function(pmat,fmla,flatten=TRUE,
   df_list <-list()
   for (i in 1:length(udates)){
     subdf <- dplyr::filter(pmat,date==udates[i])
-    fl <- lm(fmla,subdf)
+    fl <- tryCatch(lm(fmla,subdf), error=function(e) integer(1))
+    if (is.integer(fl)) {next()}
     subdf[complete.cases(subdf[,var_names]),v_name] <- fl$residuals
     df_list[[i]] <- subdf
   }
